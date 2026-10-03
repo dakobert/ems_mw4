@@ -334,3 +334,20 @@ def test_trips_parse_and_plan():
     assert sum(plan_car_trips(prices, True, 80.0, trips, P)[0]) == 0
     out, _, info = plan_car_trips(prices, False, 30.0, trips, P)
     assert sum(out) == 0 and info[0]["fehlt_kwh"] == 13.5
+
+
+def test_learn_consumption():
+    from custom_components.ems_mw4 import trips as tr
+    # zu wenig Kilometer: eingestellter Wert
+    few = [{"car_mileage": 1000.0, "car_soc": 80.0}, {"car_mileage": 1050.0, "car_soc": 65.0}]
+    assert tr.learn_consumption(few, 64.7, 20.0) == (20.0, 50.0)
+    # 200 km mit 60 % von 64,7 kWh = 19,4 kWh/100 km; Abschnitt mit Laden unterwegs zählt nicht
+    data = [
+        {"car_mileage": 1000.0, "car_soc": 90.0}, {"car_mileage": 1100.0, "car_soc": 60.0},
+        {"car_mileage": 1100.0, "car_soc": 100.0},  # geladen, kein Fahrabschnitt
+        {"car_mileage": 1200.0, "car_soc": 70.0},
+        {"car_mileage": 1300.0, "car_soc": 80.0},  # unterwegs geladen: herausgefallen
+        {"car_mileage": None, "car_soc": 50.0},
+    ]
+    value, km = tr.learn_consumption(data, 64.7, 20.0)
+    assert km == 200.0 and value == 19.4

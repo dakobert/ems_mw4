@@ -59,3 +59,32 @@ def with_routes(
             "kwh": round(2 * route["km"] * p.car_kwh_per_100km / 100.0, 1),
         })
     return out
+
+
+def learn_consumption(
+    samples: list[dict[str, Any]], car_kwh: float, default: float, min_km: float = 100.0, window_km: float = 500.0
+) -> tuple[float, float]:
+    """Verbrauch in kWh/100 km aus Kilometerstand und Ladestand der Messreihe, dazu die Kilometerbasis.
+
+    Gezählt werden nur Abschnitte, in denen der Kilometerstand steigt und der Ladestand fällt.
+    Abschnitte mit Laden unterwegs fallen heraus. Unter `min_km` gilt der eingestellte Wert.
+    """
+    km = kwh = 0.0
+    last: tuple[float, float] | None = None
+    segments: list[tuple[float, float]] = []
+    for s in samples:
+        odo, soc = s.get("car_mileage"), s.get("car_soc")
+        if odo is None or soc is None:
+            continue
+        if last is not None:
+            d_km, d_soc = odo - last[0], last[1] - soc
+            if 0 < d_km < 600 and d_soc > 0:
+                segments.append((d_km, d_soc / 100.0 * car_kwh))
+        last = (odo, soc)
+    for d_km, d_kwh in reversed(segments):
+        if km >= window_km:
+            break
+        km, kwh = km + d_km, kwh + d_kwh
+    if km < min_km:
+        return default, round(km, 0)
+    return round(max(12.0, min(35.0, kwh / km * 100.0)), 1), round(km, 0)

@@ -115,6 +115,8 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.trip_destination: str | None = None
         self.trips: list[dict[str, Any]] = []
         self.trip_status: str = "noch nicht gelesen"
+        self.car_consumption: float = self.params.car_kwh_per_100km
+        self.car_consumption_km: float = 0.0
         self._reminded: set[str] = set()
         self.proactive: dict[str, Any] = {"shift_k": 0.0, "grund": "noch nicht gerechnet"}
         self._comfort_written_at: datetime | None = None
@@ -405,7 +407,14 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 if new is not None:
                     self.routes[trip["address"]] = new
                     self._route_store.async_delay_save(lambda: {"routes": self.routes}, 5)
-        self.trips = tr.with_routes(found, self.routes, slots, self.params)
+        from dataclasses import replace
+
+        self.car_consumption, self.car_consumption_km = tr.learn_consumption(
+            self.samples, self.params.car_kwh, self.params.car_kwh_per_100km
+        )
+        self.trips = tr.with_routes(
+            found, self.routes, slots, replace(self.params, car_kwh_per_100km=self.car_consumption)
+        )
         missing = sum(1 for t in found if t["address"] not in self.routes)
         self.trip_status = f"{len(found)} Termine mit Adresse" + (f", {missing} ohne Strecke" if missing else "")
         return self.trips

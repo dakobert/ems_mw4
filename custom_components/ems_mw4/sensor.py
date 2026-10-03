@@ -466,4 +466,6 @@ class EmsTripSensor(EmsPlanBase):
             "status": self.coordinator.trip_status,
             "fahrten": [{k: v for k, v in t.items() if k != "address"} for t in trips],
             "bekannte_strecken": len(self.coordinator.routes),
+            "verbrauch_kwh_100km": self.coordinator.car_consumption,
+            "verbrauch_basis_km": self.coordinator.car_consumption_km,
         }
