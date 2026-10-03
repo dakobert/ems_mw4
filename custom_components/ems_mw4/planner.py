@@ -173,13 +173,97 @@ def battery_action(batt_kw: float, net_before_kw: float, soc: float, min_soc: fl
     return "Leerlauf"
 
 
+def _shift(heat: list[float], modes: list[str], start: int, end: int, mode: str, p: Params) -> bool:
+    """Heizenergie aus [start, end) in die Slots davor verlagern. False, wenn davor kein Platz ist."""
+    pre_len = max(1, round(p.heat_preheat_h / SLOT_H))
+    pre = [i for i in range(max(0, start - pre_len), start) if modes[i] == "normal"]
+    energy = sum(heat[start:end])
+    if energy > 0 and not pre:
+        return False
+    for i in range(start, end):
+        heat[i], modes[i] = 0.0, mode
+    for i in pre:
+        heat[i] += energy * p.heat_preheat_loss / len(pre)
+        modes[i] = "vorheizen"
+    return True
+
+
+def plan_heating(
+    slots: list[datetime], prices: list[float], temps: list[float | None], heat_kw: list[float],
+    room_temp: float | None, quiet: tuple[int, int] | None, p: Params,
+) -> tuple[list[float], list[str], list[dict[str, Any]]]:
+    """Sperren in Preisspitzen und einmaliges Ruhefenster. Vor jeder Sperre wird vorgeheizt.
+
+    Rückgabe: (Heizleistung je Slot, Modus je Slot, geplante Sperren).
+    Modi: normal, vorheizen, sperre, ruhe.
+    """
+    n = len(slots)
+    heat = list(heat_kw)
+    modes = ["normal"] * n
+    blocks: list[dict[str, Any]] = []
+    abort = p.room_target_c - p.room_band_down_c
+    if quiet is not None:
+        start, end = max(0, quiet[0]), min(n, quiet[1])
+        if end > start:
+            _shift(heat, modes, start, end, "ruhe", p)
+    if not p.heat_block_enabled:
+        return heat, modes, blocks
+    max_len = max(1, round(p.heat_block_max_h / SLOT_H))
+    gap = round(p.heat_block_gap_h / SLOT_H)
+    pre_len = max(1, round(p.heat_preheat_h / SLOT_H))
+    frost_after = round(p.heat_block_frost_after_h / SLOT_H)
+    for _ in range(8):
+        best: tuple[float, int, int, float] | None = None
+        for start in range(pre_len, n):
+            for length in range(4, max_len + 1):
+                end = start + length
+                if end > n:
+                    break
+                if any(m != "normal" for m in modes[start - pre_len : end]):
+                    continue
+                if any(b["start_index"] - gap < end and start < b["end_index"] + gap for b in blocks):
+                    continue
+                look = temps[start : min(n, end + frost_after)]
+                if any(t is None or t <= p.heat_block_frost_c for t in look):
+                    continue
+                energy = sum(heat[start:end]) * SLOT_H
+                if energy <= 0:
+                    continue
+                price_block = sum(prices[start:end]) / length
+                price_pre = sum(prices[start - pre_len : start]) / pre_len
+                advantage = price_block - price_pre * p.heat_preheat_loss
+                if price_block - price_pre < p.heat_block_min_adv_ct:
+                    continue
+                if start <= pre_len and (room_temp is None or room_temp < abort + 0.3):
+                    continue  # steht unmittelbar bevor und der Raum ist schon knapp
+                saving = energy * advantage
+                if best is None or saving > best[0]:
+                    best = (saving, start, end, price_block - price_pre)
+        if best is None or best[0] <= 0:
+            break
+        _, start, end, adv = best
+        if not _shift(heat, modes, start, end, "sperre", p):
+            break
+        blocks.append({"start_index": start, "end_index": end, "start": slots[start].isoformat(timespec="minutes"),
+                       "ende": slots[end - 1].isoformat(timespec="minutes"), "preisvorteil_ct": round(adv, 1),
+                       "ersparnis_ct": round(best[0], 1)})
+    blocks.sort(key=lambda b: b["start_index"])
+    return heat, modes, blocks
+
+
 def build_plan(
     slots: list[datetime], prices: list[float], estimated: list[bool], pv_kw: list[float],
     base_kw: list[float], heat_kw: list[float], soc_pct: float, dhw_temp: float | None,
     car_connected: bool, car_soc: float | None, price_history: list[float], p: Params,
+    temps: list[float | None] | None = None, room_temp: float | None = None,
+    quiet: tuple[int, int] | None = None,
 ) -> dict[str, Any]:
-    """Gesamtplan. Heizung geht als Prognose ein und wird noch nicht verschoben."""
+    """Gesamtplan für Heizung (Sperren, Ruhefenster), Warmwasser, Auto und Speicher."""
     n = len(slots)
+    heat_forecast = list(heat_kw)
+    heat_kw, heat_mode, heat_blocks = plan_heating(
+        slots, prices, temps if temps is not None else [None] * n, heat_kw, room_temp, quiet, p
+    )
     fixed = [base_kw[i] + heat_kw[i] - pv_kw[i] for i in range(n)]
     dhw = plan_dhw(slots, prices, fixed, dhw_temp, p)
     # Für das Auto nutzbarer PV-Überschuss: vorsichtig gerechnet, nach Auffüllen des Speichers
@@ -225,7 +309,10 @@ def build_plan(
         "price_estimated": estimated,
         "pv_kw": pv_kw,
         "base_kw": base_kw,
-        "heat_kw": heat_kw,
+        "heat_kw": [round(v, 3) for v in heat_kw],
+        "heat_forecast_kw": heat_forecast,
+        "heat_mode": heat_mode,
+        "heat_blocks": heat_blocks,
         "dhw_kw": dhw,
         "car_kw": [round(car_grid[i] + car_pv[i], 3) for i in range(n)],
         "car_grid_kw": car_grid,

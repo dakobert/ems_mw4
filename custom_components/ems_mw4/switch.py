@@ -11,7 +11,10 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity
 
 from . import EmsConfigEntry
-from .const import DOMAIN, NAME, SWITCH_BATTERY, SWITCH_DHW, SWITCH_MASTER, SWITCH_WALLBOX
+from .const import (
+    DOMAIN, NAME, SWITCH_BATTERY, SWITCH_DHW, SWITCH_HEAT_BLOCK, SWITCH_HEATING, SWITCH_MASTER, SWITCH_QUIET,
+    SWITCH_WALLBOX,
+)
 from .coordinator import EmsCoordinator
 
 SWITCHES = (
@@ -19,6 +22,9 @@ SWITCHES = (
     (SWITCH_BATTERY, "Automatik Speicher", "mdi:home-battery"),
     (SWITCH_DHW, "Automatik Warmwasser", "mdi:water-boiler"),
     (SWITCH_WALLBOX, "Automatik Wallbox", "mdi:ev-station"),
+    (SWITCH_HEATING, "Automatik Heizung", "mdi:heat-pump"),
+    (SWITCH_HEAT_BLOCK, "Sperre in Preisspitzen", "mdi:cash-lock"),
+    (SWITCH_QUIET, "Ruhefenster einmalig", "mdi:sleep"),
 )
 
 
@@ -46,6 +52,22 @@ class EmsSwitch(SwitchEntity, RestoreEntity):
         last = await self.async_get_last_state()
         if last is not None and last.state in ("on", "off"):
             self._coordinator.switches[self._key] = last.state == "on"
+            self._apply()
+
+    def _apply(self) -> None:
+        """Schalter, die den Plan ändern."""
+        on = self._coordinator.switches[self._key]
+        if self._key == SWITCH_HEAT_BLOCK:
+            if self._coordinator.params.heat_block_enabled != on:
+                self._coordinator.set_param("heat_block_enabled", on)
+        elif self._key == SWITCH_QUIET and self._coordinator.data:
+            self._coordinator.config_entry.async_create_background_task(
+                self.hass, self._coordinator.async_replan(), "ems_mw4_plan_ruhefenster"
+            )
+
+    @property
+    def should_poll(self) -> bool:
+        return self._key == SWITCH_QUIET  # setzt sich selbst zurück
 
     @property
     def is_on(self) -> bool:
@@ -53,10 +75,12 @@ class EmsSwitch(SwitchEntity, RestoreEntity):
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         self._coordinator.switches[self._key] = True
+        self._apply()
         self.async_write_ha_state()
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         self._coordinator.switches[self._key] = False
+        self._apply()
         self.async_write_ha_state()
         if self._key == SWITCH_MASTER:
             await self._coordinator.async_release()

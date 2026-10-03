@@ -135,6 +135,7 @@ def plan_entities(coordinator: EmsCoordinator, entry: EmsConfigEntry) -> list[Se
         EmsImportSensor(coordinator, entry),
         EmsHeatModelSensor(coordinator, entry),
         EmsExecutorSensor(coordinator, entry),
+        EmsHeatPlanSensor(coordinator, entry),
     ]
 
 
@@ -151,7 +152,8 @@ class EmsPlanSensor(EmsPlanBase):
 
     _unrecorded_attributes = frozenset(
         {"zeit", "preis_ct", "preis_geschaetzt", "pv_kw", "grundlast_kw", "heizung_kw", "warmwasser_kw",
-         "auto_kw", "speicher_kw", "speicher_soc", "netz_kw", "speicher_aktion", "aussentemperatur"}
+         "auto_kw", "speicher_kw", "speicher_soc", "netz_kw", "speicher_aktion", "aussentemperatur",
+         "heizung_modus"}
     )
 
     def __init__(self, coordinator: EmsCoordinator, entry: EmsConfigEntry) -> None:
@@ -180,6 +182,8 @@ class EmsPlanSensor(EmsPlanBase):
             "speicher_soc": plan["soc"],
             "netz_kw": [round(v, 2) for v in plan["grid_kw"]],
             "speicher_aktion": plan["battery_action"],
+            "heizung_modus": plan.get("heat_mode"),
+            "sperren": [{k: v for k, v in b.items() if not k.endswith("_index")} for b in plan.get("heat_blocks", [])],
             "aussentemperatur": plan.get("temp_c"),
             "kosten_eur": plan["cost_eur"],
             "bezug_kwh": plan["import_kwh"],
@@ -363,6 +367,33 @@ class EmsExecutorSensor(EmsPlanBase):
             "speicher": intent.get("battery"),
             "speicher_sollwert_w": intent.get("battery_w"),
             "warmwasser_laden": intent.get("dhw"),
+            "heizung": intent.get("heat"),
+            "heizung_hinweis": intent.get("heat_grund"),
             "wallbox": car,
             "geschrieben": self.coordinator.last_written,
+        }
+
+
+class EmsHeatPlanSensor(EmsPlanBase):
+    """Geplanter Heizungsmodus im laufenden Slot und die nächsten Sperren."""
+
+    def __init__(self, coordinator: EmsCoordinator, entry: EmsConfigEntry) -> None:
+        super().__init__(coordinator, entry, "plan_heating", "Plan Heizung")
+
+    @property
+    def native_value(self) -> str | None:
+        i = self.coordinator.plan_index()
+        if i is None or not self.coordinator.plan.get("heat_mode"):
+            return None
+        return self.coordinator.plan["heat_mode"][i]
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        plan = self.coordinator.plan or {}
+        log = self.coordinator.block_log
+        return {
+            "geplante_sperren": [{k: v for k, v in b.items() if not k.endswith("_index")} for b in plan.get("heat_blocks", [])],
+            "sperre_erlaubt": self.coordinator.params.heat_block_enabled,
+            "protokoll_anzahl": len(log),
+            "protokoll_letzte": log[-5:],
         }

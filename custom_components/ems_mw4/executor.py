@@ -28,7 +28,7 @@ def car_setpoint(kw: float) -> tuple[str, int]:
 def decide(plan: dict[str, Any] | None, i: int | None, data: dict[str, Any], plan_age_s: float | None,
            max_age_s: float, p: Params) -> dict[str, Any]:
     """Soll-Befehle für den laufenden Slot. 'grund' erklärt, warum nichts geschrieben wird."""
-    out: dict[str, Any] = {"battery_w": None, "battery": "Kostal regelt", "dhw": None, "car": None, "grund": None}
+    out: dict[str, Any] = {"battery_w": None, "battery": "Kostal regelt", "dhw": None, "car": None, "heat": None, "heat_grund": None, "grund": None}
     if plan is None or i is None:
         out["grund"] = "kein Plan"
         return out
@@ -47,6 +47,25 @@ def decide(plan: dict[str, Any] | None, i: int | None, data: dict[str, Any], pla
     # Warmwasser: SG Ready Zustand 3 im geplanten Slot
     if data.get("dhw_temp") is not None and data.get("sg_ready") is not None:
         out["dhw"] = plan["dhw_kw"][i] > 0
+    # Heizung: Vorheizen = Zustand 3, Sperre/Ruhe = Zustand 1. Abbruch, wenn der Raum zu kalt wird.
+    mode = (plan.get("heat_mode") or ["normal"] * (i + 1))[i]
+    room = data.get("room_temp")
+    out["heat"] = "normal"
+    if data.get("sg_ready") is not None:
+        if mode in ("sperre", "ruhe"):
+            if room is None:
+                out["heat_grund"] = "Raumtemperatur fehlt, keine Sperre"
+            elif room < p.room_target_c - p.room_band_down_c:
+                out["heat_grund"] = "Raum zu kalt, Sperre abgebrochen"
+            else:
+                out["heat"] = mode
+        elif mode == "vorheizen":
+            if room is not None and room >= p.room_target_c + p.room_band_up_c:
+                out["heat_grund"] = "Raum warm genug, kein Vorheizen"
+            else:
+                out["heat"] = "vorheizen"
+    else:
+        out["heat"] = None
     # Wallbox
     if data.get("car_connected") == 1.0 and data.get("wallbox_power") is not None:
         kw = plan["car_kw"][i]
@@ -56,3 +75,25 @@ def decide(plan: dict[str, Any] | None, i: int | None, data: dict[str, Any], pla
         else:
             out["car"] = {"frc": "dont_charge"}
     return out
+
+
+def sg_state(dhw: bool | None, heat: str | None, auto_dhw: bool, auto_heat: bool) -> int | None:
+    """SG-Ready-Zielzustand aus Warmwasser- und Heizungswunsch. None = nichts anfassen.
+
+    1 = Sperre (Eingang 2 an), 2 = normal, 3 = anheben (Eingang 1 an). Zustand 4 wird nie gesetzt.
+    Warmwasser im geplanten Fenster geht vor einer Sperre.
+    """
+    want_dhw = bool(dhw) and auto_dhw
+    known = (dhw is not None and auto_dhw) or (heat is not None and auto_heat)
+    if not known:
+        return None
+    if want_dhw:
+        return 3
+    if auto_heat and heat in ("sperre", "ruhe"):
+        return 1
+    if auto_heat and heat == "vorheizen":
+        return 3
+    return 2
+
+
+SG_INPUTS = {1: ("off", "on"), 2: ("off", "off"), 3: ("on", "off")}

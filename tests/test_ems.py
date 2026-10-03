@@ -319,7 +319,7 @@ async def test_executor_active_writes_battery_and_respects_device_switch(hass: H
     await c.async_execute()
     assert len(calls) == 1
     assert calls[0].data == {"hub": "Kostal-BYD", "slave": 71, "address": 1034, "value": [0, 0]}
-    assert c.last_written == {"battery_w": 0, "dhw": False}
+    assert c.last_written == {"battery_w": 0, "sg_ready": 2, "dhw": False}
     await hass.services.async_call("switch", "turn_off", {"entity_id": "switch.ems_mw4_automatik_speicher"}, blocking=True)
     await c.async_execute()
     assert len(calls) == 1  # Speicher-Automatik aus: kein weiterer Befehl
@@ -336,3 +336,80 @@ async def test_setting_changes_params(hass: HomeAssistant) -> None:
         await hass.async_block_till_done()
     assert c.params.battery_min_soc == 15.0
     assert hass.states.get("number.ems_mw4_speicher_mindest_ladestand").state == "15.0"
+
+
+# ---------- Heizung ----------
+
+
+def test_sg_state() -> None:
+    assert ex.sg_state(True, "sperre", True, True) == 3  # Warmwasser geht vor
+    assert ex.sg_state(False, "sperre", True, True) == 1
+    assert ex.sg_state(False, "ruhe", True, True) == 1
+    assert ex.sg_state(False, "vorheizen", True, True) == 3
+    assert ex.sg_state(False, "normal", True, True) == 2
+    assert ex.sg_state(False, "sperre", True, False) == 2  # Heizungs-Automatik aus
+    assert ex.sg_state(True, "sperre", False, False) is None  # nichts anfassen
+    assert ex.sg_state(None, None, True, True) is None
+    assert 4 not in ex.SG_INPUTS  # Zustand 4 wird nie gesetzt
+    assert ex.SG_INPUTS[3] == ("on", "off") and ex.SG_INPUTS[1] == ("off", "on")
+
+
+def test_decide_heating_abort() -> None:
+    p = Params()
+    base = {"battery_soc": 50.0, "grid_power": 0.0, "sg_ready": 2.0, "dhw_temp": 50.0}
+    plan = {"battery_action": ["Leerlauf"], "battery_kw": [0.0], "dhw_kw": [0.0], "car_kw": [0.0], "heat_mode": ["sperre"]}
+    assert ex.decide(plan, 0, {**base, "room_temp": 21.0}, 60, 2700, p)["heat"] == "sperre"
+    d = ex.decide(plan, 0, {**base, "room_temp": 20.4}, 60, 2700, p)
+    assert d["heat"] == "normal" and "abgebrochen" in d["heat_grund"]
+    assert ex.decide(plan, 0, {**base, "room_temp": None}, 60, 2700, p)["heat"] == "normal"
+    plan["heat_mode"] = ["vorheizen"]
+    assert ex.decide(plan, 0, {**base, "room_temp": 21.0}, 60, 2700, p)["heat"] == "vorheizen"
+    assert ex.decide(plan, 0, {**base, "room_temp": 22.0}, 60, 2700, p)["heat"] == "normal"
+
+
+async def test_heating_switches_default_off_and_sg_writes(hass: HomeAssistant) -> None:
+    _fill(hass)
+    hass.states.async_set("sensor.hostname_scb_4fa5bb_battery_soc", "50")
+    for e in DEFAULT_ROOM_SENSORS:
+        hass.states.async_set(e, "21.5")
+    hass.states.async_set("switch.stiebel_eltron_isg_sg_ready_input_1", "off")
+    hass.states.async_set("switch.stiebel_eltron_isg_sg_ready_input_2", "off")
+    entry = await _setup(hass)
+    c = entry.runtime_data
+    await c.async_refresh()
+    await c.async_refresh()
+    assert hass.states.get("switch.ems_mw4_automatik_heizung").state == "off"
+    assert hass.states.get("switch.ems_mw4_sperre_in_preisspitzen").state == "off"
+    on = async_mock_service(hass, "switch", "turn_on")
+    off = async_mock_service(hass, "switch", "turn_off")
+    async_mock_service(hass, "modbus", "write_register")
+    await _replan(hass, entry)
+    c.plan["heat_mode"] = ["sperre"] * 192
+    c.plan["dhw_kw"] = [0.0] * 192
+    c.plan["car_kw"] = [0.0] * 192
+    c.switches["master"] = True
+    await c.async_execute()
+    assert on == []  # Heizungs-Automatik aus: keine Sperre
+    c.switches["auto_heating"] = True
+    await c.async_execute()
+    assert [x.data["entity_id"] for x in on] == ["switch.stiebel_eltron_isg_sg_ready_input_2"]
+    assert c.last_written["sg_ready"] == 1 and c._block_open is not None
+    # Sperre endet: Protokolleintrag
+    hass.states.async_set("switch.stiebel_eltron_isg_sg_ready_input_2", "on")
+    c.plan["heat_mode"] = ["normal"] * 192
+    await c.async_execute()
+    assert [x.data["entity_id"] for x in off] == ["switch.stiebel_eltron_isg_sg_ready_input_2"]
+    assert len(c.block_log) == 1 and c.block_log[0]["raum_start"] == 21.5 and "ende" in c.block_log[0]
+
+
+async def test_quiet_slots(hass: HomeAssistant) -> None:
+    _fill(hass)
+    entry = await _setup(hass)
+    c = entry.runtime_data
+    from custom_components.ems_mw4 import forecast as fc2
+    slots = fc2.build_slots(dt_util.now().replace(hour=20, minute=0))
+    assert c.quiet_slots(slots) is None
+    c.switches["quiet_once"] = True
+    start, end = c.quiet_slots(slots)
+    assert slots[start].hour == 23 and slots[start].minute == 0
+    assert end - start == 16 and slots[end].hour == 3  # 23 bis 3 Uhr, nur die erste Nacht

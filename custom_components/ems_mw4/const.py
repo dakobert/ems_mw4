@@ -111,6 +111,18 @@ class Params:
     car_cheap_below_mean_ct: float = 6.0
     base_load_default_w: float = 350.0
     fixed_fee_eur_day: float = 0.46
+    # Heizung
+    room_target_c: float = 21.0
+    room_band_up_c: float = 1.0
+    room_band_down_c: float = 0.5
+    heat_block_enabled: bool = False
+    heat_block_max_h: float = 3.0
+    heat_block_gap_h: float = 6.0
+    heat_block_min_adv_ct: float = 8.0
+    heat_block_frost_c: float = 0.0
+    heat_block_frost_after_h: float = 6.0
+    heat_preheat_h: float = 2.0
+    heat_preheat_loss: float = 1.1  # Mehrverbrauch durch höhere Vorlauftemperatur beim Vorheizen
 
 # --- Phase 3/5: Einstellungen und Ausführer ---
 EXEC_INTERVAL_S = 30
@@ -129,6 +141,11 @@ SWITCH_MASTER = "master"
 SWITCH_BATTERY = "auto_battery"
 SWITCH_DHW = "auto_dhw"
 SWITCH_WALLBOX = "auto_wallbox"
+SWITCH_HEATING = "auto_heating"
+SWITCH_HEAT_BLOCK = "heat_block"
+SWITCH_QUIET = "quiet_once"
+BLOCK_LOG_STORE_KEY = f"{DOMAIN}.sperren"
+NOTIFY_SERVICE = "mobile_app_iphone_von_roy"
 
 
 @dataclass(frozen=True)
@@ -154,4 +171,9 @@ SETTINGS: tuple[Setting, ...] = (
     Setting("dhw_kwh", "Warmwasser Energie je Ladung", 0.5, 4, 0.1, "kWh", "mdi:water-boiler"),
     Setting("dhw_skip_above_c", "Warmwasser: heute keine Ladung ab", 38, 60, 1, "°C", "mdi:thermometer-water"),
     Setting("heat_limit_c", "Heizgrenze", 10, 20, 0.5, "°C", "mdi:thermometer-lines"),
+    Setting("room_target_c", "Raumtemperatur Soll", 18, 24, 0.5, "°C", "mdi:home-thermometer"),
+    Setting("heat_block_max_h", "Sperre: längste Dauer", 0.5, 3, 0.25, "h", "mdi:timer-sand"),
+    Setting("heat_block_gap_h", "Sperre: Mindestabstand", 2, 24, 1, "h", "mdi:timer-pause"),
+    Setting("heat_block_min_adv_ct", "Sperre: Mindest-Preisvorteil", 2, 30, 0.5, "ct/kWh", "mdi:cash-check"),
+    Setting("heat_block_frost_c", "Sperre: keine unter Außentemperatur", -10, 10, 0.5, "°C", "mdi:snowflake-alert"),
 )

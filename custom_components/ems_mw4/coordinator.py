@@ -42,7 +42,9 @@ from . import executor as ex
 from .const import (  # noqa: E402
     CONF_GOE_AMP, CONF_GOE_FRC, CONF_GOE_PSM, CONF_SG_INPUT_1, CONF_SG_INPUT_2, MODBUS_BATTERY_SETPOINT,
     MODBUS_HUB, MODBUS_SLAVE, PLAN_MAX_AGE_S, SWITCH_BATTERY, SWITCH_DHW, SWITCH_MASTER, SWITCH_WALLBOX,
+    BLOCK_LOG_STORE_KEY, NOTIFY_SERVICE, SWITCH_HEATING, SWITCH_HEAT_BLOCK, SWITCH_QUIET,
 )
+from datetime import time as dt_time  # noqa: E402
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -96,7 +98,17 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._model_day: Any = None
         self._replanning = False
         # Ausführer: alles aus, bis ausdrücklich eingeschaltet
-        self.switches: dict[str, bool] = {SWITCH_MASTER: False, SWITCH_BATTERY: True, SWITCH_DHW: True, SWITCH_WALLBOX: True}
+        self.switches: dict[str, bool] = {
+            SWITCH_MASTER: False, SWITCH_BATTERY: True, SWITCH_DHW: True, SWITCH_WALLBOX: True,
+            SWITCH_HEATING: False, SWITCH_HEAT_BLOCK: False, SWITCH_QUIET: False,
+        }
+        self.quiet_start: dt_time = dt_time(23, 0)
+        self.quiet_end: dt_time = dt_time(3, 0)
+        self._block_store: Store[dict[str, Any]] = Store(hass, STORE_VERSION, BLOCK_LOG_STORE_KEY)
+        self.block_log: list[dict[str, Any]] = []
+        self._block_open: dict[str, Any] | None = None
+        self._trouble_since: datetime | None = None
+        self._last_push: datetime | None = None
         self.intent: dict[str, Any] = {"grund": "noch nicht gerechnet"}
         self.last_written: dict[str, Any] = {}
         self._psm_changes: list[datetime] = []
@@ -117,6 +129,9 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         data = await self._store.async_load()
         if data and isinstance(data.get("samples"), list):
             self.samples = data["samples"][-MAX_SAMPLES:]
+        blocks = await self._block_store.async_load()
+        if blocks and isinstance(blocks.get("log"), list):
+            self.block_log = blocks["log"][-500:]
         costs = await self._cost_store.async_load()
         if costs and isinstance(costs.get("days"), dict):
             self.costs = costs["days"]
@@ -189,7 +204,8 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if i is not None:
             for key, name in (("grid_kw", "plan_grid_kw"), ("battery_kw", "plan_battery_kw"), ("soc", "plan_soc"),
                               ("battery_action", "plan_action"), ("pv_kw", "plan_pv_kw"), ("dhw_kw", "plan_dhw_kw"),
-                              ("car_kw", "plan_car_kw"), ("base_kw", "plan_base_kw"), ("heat_kw", "plan_heat_kw")):
+                              ("car_kw", "plan_car_kw"), ("base_kw", "plan_base_kw"), ("heat_kw", "plan_heat_kw"),
+                              ("heat_mode", "plan_heat_mode")):
                 sample[name] = self.plan[key][i]
         self.samples.append(sample)
         if len(self.samples) > MAX_SAMPLES:
@@ -206,6 +222,7 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Messreihe und Kosten sofort schreiben (beim Entladen)."""
         await self._store.async_save(self._data_to_save())
         await self._cost_store.async_save(self._costs_to_save())
+        await self._block_store.async_save({"log": self.block_log})
 
     # ---------- Kosten ----------
 
@@ -299,10 +316,30 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         plan = await self.hass.async_add_executor_job(
             build_plan, slots, prices, estimated, pv, base, heat, soc, self.data.get("dhw_temp"),
             self.data.get("car_connected") == 1.0, self.data.get("car_soc"), history, self.params,
+            temps, self.data.get(KEY_ROOM_TEMP), self.quiet_slots(slots),
         )
         plan["temp_c"] = temps
         self.plan, self.plan_time = plan, now
         self.plan_status = "ok" if not any(estimated[:96]) else "ok, Preise teils geschätzt"
+
+    def quiet_slots(self, slots: list[datetime]) -> tuple[int, int] | None:
+        """Slot-Bereich des einmaligen Ruhefensters (nächstes Vorkommen), falls eingeschaltet."""
+        if not self.switches[SWITCH_QUIET] or self.quiet_start == self.quiet_end:
+            return None
+
+        def inside(moment: datetime) -> bool:
+            t = moment.time()
+            if self.quiet_start < self.quiet_end:
+                return self.quiet_start <= t < self.quiet_end
+            return t >= self.quiet_start or t < self.quiet_end
+
+        start = next((i for i, s in enumerate(slots) if inside(s)), None)
+        if start is None:
+            return None
+        end = start
+        while end < len(slots) and inside(slots[end]):
+            end += 1
+        return start, end
 
     def plan_index(self) -> int | None:
         """Index des laufenden Slots im Plan."""
@@ -341,6 +378,7 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         intent = ex.decide(self.plan, self.plan_index(), self.data or {}, age, PLAN_MAX_AGE_S, self.params)
         self.intent = intent
         written: dict[str, Any] = {}
+        self._reset_quiet_when_over()
         if not self.switches[SWITCH_MASTER]:
             self.last_written = {}
             return
@@ -354,14 +392,18 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 blocking=True,
             )
             written["battery_w"] = intent["battery_w"]
-        # Warmwasser: SG Ready 3 = Eingang 1 an, Eingang 2 aus. Nur bei Änderung schreiben.
-        if self.switches[SWITCH_DHW] and intent.get("dhw") is not None:
-            want = "on" if intent["dhw"] else "off"
-            for entity_id, target in ((CONF_SG_INPUT_2, "off"), (CONF_SG_INPUT_1, want)):
+        # Wärmepumpe über SG Ready: 1 = Sperre, 2 = normal, 3 = anheben. Nur bei Änderung schreiben.
+        target = ex.sg_state(intent.get("dhw"), intent.get("heat"), self.switches[SWITCH_DHW], self.switches[SWITCH_HEATING])
+        if target is not None:
+            for entity_id, want in zip((CONF_SG_INPUT_2, CONF_SG_INPUT_1), reversed(ex.SG_INPUTS[target])):
                 state = self.hass.states.get(entity_id)
-                if state is not None and state.state in ("on", "off") and state.state != target:
-                    await call("switch", f"turn_{target}", {"entity_id": entity_id}, blocking=True)
-            written["dhw"] = intent["dhw"]
+                if state is not None and state.state in ("on", "off") and state.state != want:
+                    await call("switch", f"turn_{want}", {"entity_id": entity_id}, blocking=True)
+            written["sg_ready"] = target
+            if self.switches[SWITCH_DHW] and intent.get("dhw") is not None:
+                written["dhw"] = intent["dhw"]
+        self._track_block(target, intent)
+        await self._async_watch()
         # Wallbox
         if self.switches[SWITCH_WALLBOX] and intent.get("car") is not None:
             written["car"] = await self._async_wallbox(intent["car"])
@@ -420,3 +462,73 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if state is not None and state.state in ("charge", "dont_charge"):
             await call("select", "select_option", {"entity_id": CONF_GOE_FRC, "option": "neutral"}, blocking=True)
         self.last_written = {}
+
+    # ---------- Heizung: Ruhefenster, Sperrprotokoll, Wächter ----------
+
+    def _reset_quiet_when_over(self) -> None:
+        """Ruhefenster gilt eine Nacht: nach dem Ende schaltet es sich aus."""
+        if not self.switches[SWITCH_QUIET]:
+            self._quiet_seen = False
+            return
+        now = dt_util.now().time()
+        if self.quiet_start < self.quiet_end:
+            inside = self.quiet_start <= now < self.quiet_end
+        else:
+            inside = now >= self.quiet_start or now < self.quiet_end
+        if inside:
+            self._quiet_seen = True
+        elif getattr(self, "_quiet_seen", False):
+            self.switches[SWITCH_QUIET] = False
+            self._quiet_seen = False
+            self.config_entry.async_create_background_task(self.hass, self.async_replan(), "ems_mw4_ruhe_ende")
+
+    def _track_block(self, target: int | None, intent: dict[str, Any]) -> None:
+        """Jede ausgeführte Sperre protokollieren: Dauer, Raumtemperatur, Außentemperatur."""
+        now = dt_util.now()
+        room = (self.data or {}).get(KEY_ROOM_TEMP)
+        blocked = target == 1
+        if blocked and self._block_open is None:
+            self._block_open = {
+                "start": now.isoformat(timespec="minutes"), "art": intent.get("heat"), "raum_start": room,
+                "raum_min": room, "aussen": (self.data or {}).get("outdoor_temp"),
+                "verdichter_starts": 0, "_last_comp": (self.data or {}).get("compressor"),
+            }
+        elif self._block_open is not None:
+            entry = self._block_open
+            if room is not None and (entry["raum_min"] is None or room < entry["raum_min"]):
+                entry["raum_min"] = room
+            comp = (self.data or {}).get("compressor")
+            if comp == 1.0 and entry["_last_comp"] == 0.0:
+                entry["verdichter_starts"] += 1
+            entry["_last_comp"] = comp
+            if not blocked:
+                entry.pop("_last_comp", None)
+                entry["ende"] = now.isoformat(timespec="minutes")
+                entry["raum_ende"] = room
+                entry["abbruch"] = intent.get("heat_grund")
+                self.block_log.append(entry)
+                del self.block_log[:-500]
+                self._block_open = None
+                self._block_store.async_delay_save(lambda: {"log": self.block_log}, 30)
+
+    async def _async_watch(self) -> None:
+        """Bei aktiver Steuerung: Push, wenn Messwerte oder Plan länger als 10 Minuten fehlen."""
+        now = dt_util.utcnow()
+        trouble = bool(self.missing) or not self.plan_status.startswith("ok")
+        if not trouble:
+            self._trouble_since = None
+            return
+        if self._trouble_since is None:
+            self._trouble_since = now
+            return
+        if (now - self._trouble_since).total_seconds() < 600:
+            return
+        if self._last_push is not None and (now - self._last_push).total_seconds() < 3600:
+            return
+        if not self.hass.services.has_service("notify", NOTIFY_SERVICE):
+            return
+        self._last_push = now
+        text = f"Plan: {self.plan_status}. Fehlende Messwerte: {', '.join(self.missing) or 'keine'}."
+        await self.hass.services.async_call(
+            "notify", NOTIFY_SERVICE, {"title": "EMS MW4: Störung", "message": text}, blocking=False
+        )

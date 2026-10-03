@@ -12,7 +12,7 @@ from homeassistant.helpers.event import async_track_time_change, async_track_tim
 from .const import EXEC_INTERVAL_S, PLAN_MINUTES, SAMPLE_MINUTES
 from .coordinator import EmsCoordinator
 
-PLATFORMS: list[Platform] = [Platform.SENSOR, Platform.NUMBER, Platform.SWITCH]
+PLATFORMS: list[Platform] = [Platform.SENSOR, Platform.NUMBER, Platform.SWITCH, Platform.TIME]
 
 type EmsConfigEntry = ConfigEntry[EmsCoordinator]
 

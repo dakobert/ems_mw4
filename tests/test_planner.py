@@ -190,3 +190,70 @@ def test_car_no_grid_charging_when_pv_covers():
     # Grundreserve gilt immer, auch bei viel PV
     plan = build_plan(SLOTS, prices, [False] * N, pv, [0.4] * N, [0.0] * N, 60.0, 55.0, True, 10.0, hist, P)
     assert sum(plan["car_grid_kw"]) * 0.25 >= 6.4
+
+
+# ---------- Heizung ----------
+
+from dataclasses import replace  # noqa: E402
+
+from custom_components.ems_mw4.planner import plan_heating  # noqa: E402
+
+PB = replace(P, heat_block_enabled=True)
+
+
+def _peak_prices():
+    return [50.0 if 18 <= s.hour < 20 else 30.0 for s in SLOTS]
+
+
+def test_heating_no_block_when_disabled_or_frost_or_small_advantage():
+    heat = [1.0] * N
+    temps = [5.0] * N
+    out, modes, blocks = plan_heating(SLOTS, _peak_prices(), temps, heat, 21.0, None, P)
+    assert blocks == [] and out == heat and set(modes) == {"normal"}
+    # Frost im Fenster oder in den 6 Stunden danach
+    frosty = [(-1.0 if 21 <= s.hour < 23 else 5.0) for s in SLOTS]
+    assert plan_heating(SLOTS, _peak_prices(), frosty, heat, 21.0, None, PB)[2] == []
+    # Preisvorteil unter 8 ct
+    weak = [36.0 if 18 <= s.hour < 20 else 30.0 for s in SLOTS]
+    assert plan_heating(SLOTS, weak, temps, heat, 21.0, None, PB)[2] == []
+    # keine Temperaturprognose: keine Sperre
+    assert plan_heating(SLOTS, _peak_prices(), [None] * N, heat, 21.0, None, PB)[2] == []
+
+
+def test_heating_block_with_preheat():
+    heat = [1.0] * N
+    out, modes, blocks = plan_heating(SLOTS, _peak_prices(), [5.0] * N, heat, 21.0, None, PB)
+    assert len(blocks) == 2  # je Tag die Abendspitze
+    b = blocks[0]
+    assert b["end_index"] - b["start_index"] <= 12  # höchstens 3 Stunden
+    assert b["end_index"] - b["start_index"] == 8  # genau die teuren 2 Stunden
+    assert all(modes[i] == "sperre" and out[i] == 0.0 for i in range(b["start_index"], b["end_index"]))
+    pre = range(b["start_index"] - 8, b["start_index"])
+    assert all(modes[i] == "vorheizen" for i in pre)
+    # Energie bleibt erhalten, plus 10 % Vorheizverlust
+    assert abs(sum(out[i] for i in pre) - (8 * 1.0 + 8 * 1.0 * 1.1)) < 1e-6
+    assert b["preisvorteil_ct"] == 20.0
+    # Mindestabstand 6 Stunden zwischen zwei Sperren
+    assert blocks[1]["start_index"] - blocks[0]["end_index"] >= 24
+
+
+def test_heating_block_max_three_hours():
+    prices = [50.0 if 16 <= s.hour < 22 else 30.0 for s in SLOTS]  # 6 Stunden teuer
+    out, modes, blocks = plan_heating(SLOTS, prices, [5.0] * N, [1.0] * N, 21.0, None, PB)
+    assert blocks and all(b["end_index"] - b["start_index"] <= 12 for b in blocks)
+    for a, b in zip(blocks, blocks[1:]):
+        assert b["start_index"] - a["end_index"] >= 24
+
+
+def test_quiet_window_shifts_heat():
+    out, modes, blocks = plan_heating(SLOTS, [30.0] * N, [5.0] * N, [1.0] * N, 21.0, (92, 108), P)
+    assert all(modes[i] == "ruhe" and out[i] == 0 for i in range(92, 108))
+    assert all(modes[i] == "vorheizen" for i in range(84, 92))
+    assert blocks == []
+
+
+def test_build_plan_with_heating():
+    plan = build_plan(SLOTS, _peak_prices(), [False] * N, [0.0] * N, [0.4] * N, [1.0] * N, 50.0, 55.0, False, None,
+                      _peak_prices(), PB, [5.0] * N, 21.0, None)
+    assert "sperre" in plan["heat_mode"] and len(plan["heat_blocks"]) == 2
+    assert plan["heat_forecast_kw"] == [1.0] * N
