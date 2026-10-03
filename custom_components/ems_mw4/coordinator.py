@@ -390,11 +390,15 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if self.hass.states.get(CONF_TRIP_CALENDAR) is None or not self.hass.services.has_service("calendar", "get_events"):
             self.trips, self.trip_status = [], "Kalender nicht verfügbar"
             return []
-        response = await self.hass.services.async_call(
-            "calendar", "get_events", {"entity_id": CONF_TRIP_CALENDAR, "duration": {"hours": 48}},
-            blocking=True, return_response=True,
-        )
-        events = (response or {}).get(CONF_TRIP_CALENDAR, {}).get("events", [])
+        events = await self._async_events_direct(now)
+        source = "volle Adressen"
+        if events is None:
+            source = "nur Ortsname"
+            response = await self.hass.services.async_call(
+                "calendar", "get_events", {"entity_id": CONF_TRIP_CALENDAR, "duration": {"hours": 48}},
+                blocking=True, return_response=True,
+            )
+            events = (response or {}).get(CONF_TRIP_CALENDAR, {}).get("events", [])
         found = tr.parse_events(events, now)
         stale = now - timedelta(days=ROUTE_MAX_AGE_DAYS)
         lookups = 0
@@ -416,8 +420,30 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             found, self.routes, slots, replace(self.params, car_kwh_per_100km=self.car_consumption)
         )
         missing = sum(1 for t in found if t["address"] not in self.routes)
-        self.trip_status = f"{len(found)} Termine mit Adresse" + (f", {missing} ohne Strecke" if missing else "")
+        self.trip_status = (
+            f"{len(found)} Termine mit Adresse" + (f", {missing} ohne Strecke" if missing else "") + f" ({source})"
+        )
         return self.trips
+
+    async def _async_events_direct(self, now: datetime) -> list[dict[str, Any]] | None:
+        """Termine samt voller Adresse aus der laufenden Kalender-Integration holen. None, wenn das nicht geht.
+
+        Die Kalender-Entität liefert nur den Anzeigenamen des Ortes. Die Terminobjekte der Integration
+        enthalten Straße, Postleitzahl und Ort. Eigene Zugangsdaten braucht EMS MW4 dafür nicht.
+        """
+        state = self.hass.states.get(CONF_TRIP_CALENDAR)
+        wanted = (state.attributes.get("friendly_name") or "").strip() if state else ""
+        try:
+            for entry in self.hass.config_entries.async_entries("ms365_calendar"):
+                for cal in getattr(getattr(entry, "runtime_data", None), "coordinator", None) or []:
+                    config = getattr(cal, "entity", None)
+                    name = str(config.get("name") if isinstance(config, dict) else "").strip()
+                    if not wanted or name != wanted:
+                        continue
+                    return tr.events_from_objects(await cal.async_get_events(now, now + timedelta(hours=48)))
+        except Exception:  # noqa: BLE001 - fremde Integration: bei jeder Abweichung auf den Standardweg zurückfallen
+            _LOGGER.warning("Kalender direkt nicht lesbar, nutze den Standardweg", exc_info=True)
+        return None
 
     async def _async_route(self, address: str, now: datetime) -> dict[str, Any] | None:
         """Entfernung und Fahrzeit über die Fahrzeit-Sensoren holen. Ziel ist der Sensor „Fahrtziel"."""

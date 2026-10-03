@@ -88,3 +88,31 @@ def learn_consumption(
     if km < min_km:
         return default, round(km, 0)
     return round(max(12.0, min(35.0, kwh / km * 100.0)), 1), round(km, 0)
+
+
+def location_text(location: Any) -> str:
+    """Adresse aus dem Ortsobjekt von Microsoft: Straße, Postleitzahl und Ort, sonst der Anzeigename."""
+    if not isinstance(location, dict):
+        return str(location or "")
+    address = location.get("address") or {}
+    street, code, city = (str(address.get(k) or "").strip() for k in ("street", "postalCode", "city"))
+    if street and code and city:
+        return f"{street}, {code} {city}"
+    return str(location.get("displayName") or "").strip()
+
+
+def events_from_objects(objects: Any) -> list[dict[str, Any]]:
+    """Terminobjekte der Kalender-Integration in das einfache Format von parse_events übersetzen."""
+    out = []
+    for obj in objects or []:
+        start, end = getattr(obj, "start", None), getattr(obj, "end", None)
+        if not isinstance(start, datetime) or not isinstance(end, datetime):
+            continue
+        all_day = bool(getattr(obj, "is_all_day", False))
+        out.append({
+            "start": start.date().isoformat() if all_day else start.isoformat(),
+            "end": end.date().isoformat() if all_day else end.isoformat(),
+            "summary": getattr(obj, "subject", "") or "",
+            "location": location_text(getattr(obj, "location", None)),
+        })
+    return out

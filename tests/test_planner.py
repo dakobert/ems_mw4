@@ -351,3 +351,19 @@ def test_learn_consumption():
     ]
     value, km = tr.learn_consumption(data, 64.7, 20.0)
     assert km == 200.0 and value == 19.4
+
+
+def test_location_from_microsoft_objects():
+    from datetime import datetime, timezone
+    from types import SimpleNamespace as NS
+    from custom_components.ems_mw4 import trips as tr
+    full = {"displayName": "Musterstraße 1", "address": {"street": "Musterstraße 1", "postalCode": "33602", "city": "Bielefeld"}}
+    assert tr.location_text(full) == "Musterstraße 1, 33602 Bielefeld"
+    assert tr.location_text({"displayName": "Herr Muster", "address": {}}) == "Herr Muster"
+    assert tr.location_text(None) == ""
+    t0 = datetime(2026, 10, 5, 14, 0, tzinfo=timezone.utc)
+    objs = [NS(start=t0, end=t0, is_all_day=False, subject="Kurs", location=full),
+            NS(start=t0, end=t0, is_all_day=True, subject="Reise", location=full), NS(start=None, end=None)]
+    events = tr.events_from_objects(objs)
+    assert len(events) == 2 and events[0]["location"].endswith("33602 Bielefeld") and "T" not in events[1]["start"]
+    assert len(tr.parse_events(events, datetime(2026, 10, 3, tzinfo=timezone.utc))) == 1
