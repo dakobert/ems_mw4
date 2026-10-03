@@ -316,14 +316,14 @@ def test_trips_parse_and_plan():
         {"start": start.isoformat(), "end": start.isoformat(), "summary": "ohne Adresse", "location": "Herr Muster"},
         {"start": "2026-10-05", "end": "2026-10-06", "summary": "ganztägig", "location": "Weg 2, 01067 Dresden"},
     ]
-    found = tr.parse_events(events, now)
+    found = [v for v in tr.parse_events(events, now) if v["summary"] == "Kurs"]
     assert len(found) == 1 and tr.is_address("Weg 2, 01067 Dresden") and not tr.is_address("Büro")
     assert tr.with_routes(found, {}, SLOTS, P) == []  # ohne Strecke keine Fahrt
     routes = {found[0]["address"]: {"km": 50.0, "min": 45.0, "t": now.isoformat()}}
     near = {found[0]["address"]: {"km": 4.9, "min": 8.0, "t": now.isoformat()}}
     assert tr.with_routes(found, near, SLOTS, P) == []  # bis 5 km keine Fahrt
     trips = tr.with_routes(found, routes, SLOTS, P)
-    assert trips[0]["kwh"] == 20.0 and trips[0]["dep_index"] == 76  # 20 h - 45 min - 15 min = 19 h
+    assert trips[0]["kwh"] == 20.0 and trips[0]["km"] == 100.0 and trips[0]["dep_index"] == 76  # 20 h - 45 min - 15 min = 19 h
     prices = [40.0] * N
     prices[10], prices[11] = 10.0, 12.0
     prices[100] = 1.0  # billig, aber nach der Abfahrt
@@ -373,4 +373,50 @@ def test_location_from_microsoft_objects():
     only = tr.events_from_objects([NS(start=t0, end=t0, is_all_day=False, subject="Kurs", location=geo)])
     trip = tr.parse_events(only, datetime(2026, 10, 3, tzinfo=timezone.utc))[0]
     assert trip["coords"] == "52.02,8.53" and trip["address"] == "Halle" and only[0]["shape"]["koordinaten"]
-    assert len(tr.parse_events(events, datetime(2026, 10, 3, tzinfo=timezone.utc))) == 1
+    assert len(tr.parse_events(events, datetime(2026, 10, 3, tzinfo=timezone.utc))) == 2  # Termin und ganztägig
+
+
+def test_trip_chain_allday_multiday_overnight():
+    from datetime import datetime, timedelta, timezone
+    from custom_components.ems_mw4 import trips as tr
+    tz = timezone(timedelta(hours=2))
+    now = datetime(2026, 10, 3, 12, 0, tzinfo=tz)
+    a, b = "52.0,8.0", "52.1,8.0"
+    routes = {"A": {"km": 50.0, "min": 40.0, "t": ""}, "B": {"km": 60.0, "min": 50.0, "t": ""}}
+
+    def ev(start, end, loc, coords, desc=""):
+        return {"start": start, "end": end, "summary": loc, "location": loc, "coords": coords, "description": desc}
+
+    # Kette: zwei Termine mit 1 h Abstand -> eine Fahrt, hin zu A, weiter zu B, zurück von B
+    chain = tr.build_trips(tr.parse_events([
+        ev("2026-10-05T09:00:00+02:00", "2026-10-05T11:00:00+02:00", "A", a),
+        ev("2026-10-05T12:00:00+02:00", "2026-10-05T14:00:00+02:00", "B", b),
+    ], now), routes, P)
+    assert len(chain) == 1 and chain[0]["kette"] and chain[0]["summary"] == "A + B"
+    hop = tr._hop_km(a, b)
+    assert 14 < hop < 15 and abs(chain[0]["km"] - (50 + hop + 60)) < 0.1
+    assert chain[0]["abfahrt"] == datetime(2026, 10, 5, 8, 5, tzinfo=tz)
+    assert chain[0]["rueckkehr"] == datetime(2026, 10, 5, 14, 50, tzinfo=tz)
+    # 3 h Abstand: zwei Fahrten
+    two = tr.build_trips(tr.parse_events([
+        ev("2026-10-05T09:00:00+02:00", "2026-10-05T10:00:00+02:00", "A", a),
+        ev("2026-10-05T13:00:00+02:00", "2026-10-05T14:00:00+02:00", "B", b),
+    ], now), routes, P)
+    assert len(two) == 2 and not two[0]["kette"] and two[0]["km"] == 100.0
+    # ganztägig über drei Tage: je Tag 7 bis 17 Uhr
+    days = tr.build_trips(tr.parse_events([ev("2026-10-05", "2026-10-08", "A", a)], now), routes, P)
+    assert len(days) == 3 and days[0]["abfahrt"].hour == 7 and days[0]["rueckkehr"].hour == 17
+    # mehrtägig mit Uhrzeit: erster Tag ab Beginn, letzter Tag bis Ende
+    multi = tr.build_trips(tr.parse_events([ev("2026-10-05T10:00:00+02:00", "2026-10-06T15:00:00+02:00", "A", a)], now), routes, P)
+    assert len(multi) == 2 and multi[0]["abfahrt"] == datetime(2026, 10, 5, 9, 5, tzinfo=tz)
+    assert multi[0]["rueckkehr"].hour == 17 and multi[1]["abfahrt"].hour == 7
+    assert multi[1]["rueckkehr"] == datetime(2026, 10, 6, 15, 40, tzinfo=tz)
+    # Übernachtung: eine Fahrt, durchgehend abwesend
+    night = tr.build_trips(tr.parse_events([ev("2026-10-05", "2026-10-08", "A", a, "Hotel #Übernachtung")], now), routes, P)
+    assert len(night) == 1 and night[0]["km"] == 100.0
+    assert night[0]["abfahrt"] == datetime(2026, 10, 5, 7, 0, tzinfo=tz) and night[0]["rueckkehr"] == datetime(2026, 10, 7, 17, 0, tzinfo=tz)
+    # ohne Koordinaten und ohne Postleitzahl: keine Fahrt; später als das Planfenster: Liste
+    assert tr.parse_events([ev("2026-10-05", "2026-10-06", "Dresden", None)], now) == []
+    slots = [now + timedelta(minutes=15 * i) for i in range(192)]
+    visits = tr.parse_events([ev("2026-10-08T09:00:00+02:00", "2026-10-08T11:00:00+02:00", "A", a)], now)
+    assert tr.with_routes(visits, routes, slots, P) == [] and tr.later_trips(visits, routes, slots, P)[0]["kwh"] == 20.0

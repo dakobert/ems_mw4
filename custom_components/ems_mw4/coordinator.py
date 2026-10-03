@@ -50,6 +50,9 @@ from . import trips as tr  # noqa: E402
 from .const import (  # noqa: E402
     CONF_ROUTE_DISTANCE, CONF_ROUTE_DURATION, CONF_TRIP_CALENDAR, ROUTE_MAX_AGE_DAYS, ROUTE_STORE_KEY,
 )
+
+ACTION_SNOOZE = "EMS_MW4_SPAETER"
+ACTION_SKIP = "EMS_MW4_HEUTE_NICHT"
 from datetime import time as dt_time  # noqa: E402
 
 _LOGGER = logging.getLogger(__name__)
@@ -116,6 +119,12 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.trips: list[dict[str, Any]] = []
         self.trip_status: str = "noch nicht gelesen"
         self.trip_shapes: list[dict[str, Any]] = []
+        self.later_trips: list[dict[str, Any]] = []
+        self._last_mileage: float | None = None
+        self._arrival: datetime | None = None
+        self._reminder_sent_for: datetime | None = None
+        self._snooze_until: datetime | None = None
+        self._muted_day: Any = None
         self.car_consumption: float = self.params.car_kwh_per_100km
         self.car_consumption_km: float = 0.0
         self._reminded: set[str] = set()
@@ -152,6 +161,9 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         blocks = await self._block_store.async_load()
         if blocks and isinstance(blocks.get("log"), list):
             self.block_log = blocks["log"][-500:]
+        self.config_entry.async_on_unload(
+            self.hass.bus.async_listen("mobile_app_notification_action", self.handle_notification_action)
+        )
         costs = await self._cost_store.async_load()
         if costs and isinstance(costs.get("days"), dict):
             self.costs = costs["days"]
@@ -348,7 +360,6 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         plan["temp_c"] = temps
         self._update_proactive(temps)
-        await self._async_trip_reminder(now)
         self.plan, self.plan_time = plan, now
         self.plan_status = "ok" if not any(estimated[:96]) else "ok, Preise teils geschätzt"
 
@@ -396,12 +407,12 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if events is None:
             source = "nur Ortsname"
             response = await self.hass.services.async_call(
-                "calendar", "get_events", {"entity_id": CONF_TRIP_CALENDAR, "duration": {"hours": 72}},
+                "calendar", "get_events", {"entity_id": CONF_TRIP_CALENDAR, "duration": {"hours": 168}},
                 blocking=True, return_response=True,
             )
             events = (response or {}).get(CONF_TRIP_CALENDAR, {}).get("events", [])
         self.trip_shapes = [e["shape"] for e in events if e.get("shape") and e["shape"].get("felder")][:6]
-        found = tr.parse_events(events, now)
+        found = tr.parse_events(events, now, self.params)
         stale = now - timedelta(days=ROUTE_MAX_AGE_DAYS)
         lookups = 0
         for trip in found:
@@ -418,10 +429,10 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.car_consumption, self.car_consumption_km = tr.learn_consumption(
             self.samples, self.params.car_kwh, self.params.car_kwh_per_100km
         )
-        self.trips = tr.with_routes(
-            found, self.routes, slots, replace(self.params, car_kwh_per_100km=self.car_consumption)
-        )
-        missing = sum(1 for t in found if t["address"] not in self.routes)
+        learned = replace(self.params, car_kwh_per_100km=self.car_consumption)
+        self.trips = tr.with_routes(found, self.routes, slots, learned)
+        self.later_trips = tr.later_trips(found, self.routes, slots, learned)
+        missing = len({t["address"] for t in found if t["address"] not in self.routes})
         self.trip_status = (
             f"{len(found)} Termine mit Adresse" + (f", {missing} ohne Strecke" if missing else "") + f" ({source})"
         )
@@ -442,7 +453,7 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     name = str(config.get("name") if isinstance(config, dict) else "").strip()
                     if not wanted or name != wanted:
                         continue
-                    return tr.events_from_objects(await cal.async_get_events(now, now + timedelta(hours=72)))
+                    return tr.events_from_objects(await cal.async_get_events(now, now + timedelta(days=7)))
         except Exception:  # noqa: BLE001 - fremde Integration: bei jeder Abweichung auf den Standardweg zurückfallen
             _LOGGER.warning("Kalender direkt nicht lesbar, nutze den Standardweg", exc_info=True)
         return None
@@ -474,20 +485,60 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return None
         return {"km": round(km, 1), "min": round(minutes, 1), "t": now.isoformat()}
 
-    async def _async_trip_reminder(self, now: datetime) -> None:
-        """Abends erinnern, wenn für eine Fahrt in den nächsten 16 Stunden Ladung fehlt und das Auto nicht angesteckt ist."""
-        if now.hour < 18 or (self.data or {}).get("car_connected") == 1.0:
+    def charge_needed_kwh(self) -> float:
+        """Was dem Auto für geplante Fahrten oder die Grundreserve fehlt, solange es nicht lädt."""
+        need = sum((t.get("fehlt_kwh") or 0.0) for t in (self.plan or {}).get("trips", []))
+        soc = (self.data or {}).get("car_soc")
+        if soc is not None and soc < self.params.car_reserve_soc:
+            need = max(need, (self.params.car_reserve_soc - soc) / 100.0 * self.params.car_kwh)
+        return round(need, 1)
+
+    async def _async_reminder(self) -> None:
+        """Erinnerung ans Anstecken: frühestens 30 Minuten nach Ankunft, nicht zwischen 22 und 7 Uhr.
+
+        Ankunft = der Kilometerstand hat sich geändert. Während einer geplanten Abwesenheit wird nicht erinnert.
+        """
+        now = dt_util.now()
+        data = self.data or {}
+        mileage = data.get("car_mileage")
+        if mileage is not None:
+            if self._last_mileage is not None and mileage > self._last_mileage:
+                self._arrival, self._snooze_until = now, None
+            self._last_mileage = mileage
+        if self._arrival is None or data.get("car_connected") != 0.0:
             return
-        for trip in (self.plan or {}).get("trips", []):
-            hours = (datetime.fromisoformat(trip["abfahrt"]) - now).total_seconds() / 3600.0
-            key = trip["abfahrt"]
-            if 0 < hours <= 16 and (trip.get("fehlt_kwh") or 0) > 0 and key not in self._reminded:
-                self._reminded.add(key)
-                if self.hass.services.has_service("notify", NOTIFY_SERVICE):
-                    await self.hass.services.async_call("notify", NOTIFY_SERVICE, {
-                        "title": "EMS MW4: Auto anstecken",
-                        "message": f"Für die Fahrt morgen fehlen {trip['fehlt_kwh']} kWh. Das Auto ist nicht angesteckt.",
-                    })
+        if now.hour >= 22 or now.hour < 7 or self._muted_day == now.date():
+            return
+        if any(
+            datetime.fromisoformat(t["abfahrt"]) <= now <= datetime.fromisoformat(t["rueckkehr"])
+            for t in (self.plan or {}).get("trips", [])
+        ):
+            return
+        due = self._snooze_until if self._snooze_until is not None else self._arrival + timedelta(minutes=30)
+        if now < due or (self._snooze_until is None and self._reminder_sent_for == self._arrival):
+            return
+        need = self.charge_needed_kwh()
+        if need <= 0:
+            return
+        self._reminder_sent_for, self._snooze_until = self._arrival, None
+        if self.hass.services.has_service("notify", NOTIFY_SERVICE):
+            await self.hass.services.async_call("notify", NOTIFY_SERVICE, {
+                "title": "EMS MW4: Auto anstecken",
+                "message": f"Es fehlen {need} kWh für die nächsten Fahrten. Das Auto ist nicht angesteckt.",
+                "data": {"actions": [
+                    {"action": ACTION_SNOOZE, "title": "In 1 Stunde erneut"},
+                    {"action": ACTION_SKIP, "title": "Heute nicht"},
+                ]},
+            })
+
+    @callback
+    def handle_notification_action(self, event: Any) -> None:
+        """Antwort auf die Tasten der Erinnerung."""
+        action = event.data.get("action")
+        if action == ACTION_SNOOZE:
+            self._snooze_until = dt_util.now() + timedelta(hours=1)
+        elif action == ACTION_SKIP:
+            self._muted_day = dt_util.now().date()
 
     # ---------- Vorausschauend heizen ----------
 
@@ -565,6 +616,7 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.intent = intent
         written: dict[str, Any] = {}
         self._reset_quiet_when_over()
+        await self._async_reminder()
         if not self.switches[SWITCH_MASTER]:
             self.last_written = {}
             return

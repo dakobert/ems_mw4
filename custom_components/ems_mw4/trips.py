@@ -1,12 +1,13 @@
 """Fahrten aus dem Kalender: Termine mit voller Adresse, Abfahrt, Rückkehr und Energiebedarf.
 
-Reine Funktionen. Ein Termin zählt nur als Fahrt, wenn im Ortsfeld eine Adresse mit
-Postleitzahl steht. Ganztägige Termine haben keine Abfahrtszeit und zählen nicht.
+Reine Funktionen. Ein Termin zählt nur als Fahrt, wenn sein Ort Koordinaten oder eine
+Adresse mit Postleitzahl hat und mehr als 5 km entfernt liegt.
 """
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import date, datetime, time, timedelta
+import math
 import re
 from typing import Any
 
@@ -19,54 +20,141 @@ def is_address(location: str | None) -> bool:
     return bool(location and _PLZ.search(location))
 
 
-def parse_events(events: list[dict[str, Any]], now: datetime) -> list[dict[str, Any]]:
-    """Kalendereinträge zu Fahrten: nur Termine mit Uhrzeit, Adresse und Beginn in der Zukunft."""
-    trips = []
+_OVERNIGHT = ("#übernachtung", "#uebernachtung", "#&uuml;bernachtung")
+
+
+def _day_time(day: date, hours: float, tz: Any) -> datetime:
+    return datetime.combine(day, time(int(hours), int(round(hours % 1 * 60))), tzinfo=tz)
+
+
+def parse_events(events: list[dict[str, Any]], now: datetime, p: Params | None = None) -> list[dict[str, Any]]:
+    """Kalendereinträge zu Aufenthalten am Zielort.
+
+    - Termin mit Uhrzeit am selben Tag: ein Aufenthalt von Beginn bis Ende.
+    - Ganztägig: je Tag abwesend von 7 bis 17 Uhr (einstellbar), feste Abfahrt und Rückkehr.
+    - Mehrtägig mit Uhrzeit: tägliche Hin- und Rückfahrt, erster Tag ab Beginn, letzter Tag bis Ende.
+    - „#übernachtung" in den Notizen: einmal hin, einmal zurück, dazwischen durchgehend abwesend.
+    Ohne Koordinaten oder Adresse mit Postleitzahl ist ein Termin keine Fahrt.
+    """
+    p = p or Params()
+    visits: list[dict[str, Any]] = []
     for event in events:
         start, end, location = event.get("start"), event.get("end"), (event.get("location") or "").strip()
         coords = event.get("coords")
-        if not isinstance(start, str) or "T" not in start or not isinstance(end, str):
+        if not isinstance(start, str) or not isinstance(end, str):
             continue
         if not coords and not is_address(location):
             continue
+        base = {"summary": event.get("summary") or "", "address": location or coords, "coords": coords}
+        overnight = any(tag in (event.get("description") or "").lower() for tag in _OVERNIGHT)
         try:
-            begin, finish = datetime.fromisoformat(start), datetime.fromisoformat(end)
+            if "T" not in start:  # ganztägig, Ende ist der Tag danach
+                first, last = date.fromisoformat(start[:10]), date.fromisoformat(end[:10]) - timedelta(days=1)
+                begin, finish, all_day = None, None, True
+            else:
+                begin, finish = datetime.fromisoformat(start), datetime.fromisoformat(end)
+                first, last, all_day = begin.astimezone(now.tzinfo).date(), finish.astimezone(now.tzinfo).date(), False
         except ValueError:
             continue
-        if begin <= now:
+        if last < first:
+            last = first
+        if (last - first).days > 31:
             continue
-        trips.append({
-            "start": begin, "end": finish, "summary": event.get("summary") or "", "address": location or coords,
-            "coords": coords,
-        })
-    return sorted(trips, key=lambda t: t["start"])
+        if not all_day and (first == last or finish - begin < timedelta(hours=24)):
+            visits.append({**base, "start": begin, "end": finish, "depart_fixed": None, "back_fixed": None})
+            continue
+        go, home = p.allday_depart_h, p.allday_back_h
+        if overnight:
+            visits.append({
+                **base, "start": begin or _day_time(first, go, now.tzinfo), "end": finish or _day_time(last, home, now.tzinfo),
+                "depart_fixed": None if begin else _day_time(first, go, now.tzinfo),
+                "back_fixed": None if finish else _day_time(last, home, now.tzinfo),
+            })
+            continue
+        day = first
+        while day <= last:
+            early = begin if (begin and day == first) else None
+            late = finish if (finish and day == last) else None
+            visits.append({
+                **base, "start": early or _day_time(day, go, now.tzinfo), "end": late or _day_time(day, home, now.tzinfo),
+                "depart_fixed": None if early else _day_time(day, go, now.tzinfo),
+                "back_fixed": None if late else _day_time(day, home, now.tzinfo),
+            })
+            day += timedelta(days=1)
+    return sorted((v for v in visits if v["start"] > now), key=lambda v: v["start"])
 
 
-def with_routes(
-    trips: list[dict[str, Any]], routes: dict[str, dict[str, Any]], slots: list[datetime], p: Params
-) -> list[dict[str, Any]]:
-    """Abfahrt, Rückkehr, Energie und Slot-Indizes je Fahrt. Fahrten ohne bekannte Strecke bleiben draußen."""
-    out = []
-    step = timedelta(minutes=SLOT_MIN)
-    for trip in trips:
-        route = routes.get(trip["address"])
+def _hop_km(a: str | None, b: str | None) -> float:
+    """Geschätzte Straßenentfernung zwischen zwei Zielen: Luftlinie mal 1,3."""
+    try:
+        lat1, lon1 = (math.radians(float(x)) for x in (a or "").split(","))
+        lat2, lon2 = (math.radians(float(x)) for x in (b or "").split(","))
+    except ValueError:
+        return 0.0
+    h = math.sin((lat2 - lat1) / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin((lon2 - lon1) / 2) ** 2
+    return 6371.0 * 2 * math.asin(math.sqrt(h)) * 1.3
+
+
+def build_trips(visits: list[dict[str, Any]], routes: dict[str, dict[str, Any]], p: Params) -> list[dict[str, Any]]:
+    """Aufenthalte zu Fahrten: Abfahrt, Rückkehr, Energie. Termine mit unter 2 Stunden Abstand werden zur Kette."""
+    legs = []
+    for visit in visits:
+        route = routes.get(visit["address"])
         if not route or route.get("km") is None or route.get("min") is None:
             continue
         if route["km"] <= p.trip_min_km or route["km"] > 600:
             continue
         travel = timedelta(minutes=route["min"])
-        depart = trip["start"] - travel - timedelta(minutes=p.trip_buffer_min)
-        back = trip["end"] + travel
-        if depart < slots[0] or depart >= slots[-1] + step:
+        legs.append({
+            **visit, "km_hin": route["km"], "km_rueck": route["km"], "fahrzeit_min": round(route["min"]),
+            "km": round(2 * route["km"], 1),
+            "abfahrt": visit["depart_fixed"] or visit["start"] - travel - timedelta(minutes=p.trip_buffer_min),
+            "rueckkehr": visit["back_fixed"] or visit["end"] + travel,
+        })
+    legs.sort(key=lambda t: t["abfahrt"])
+    out: list[dict[str, Any]] = []
+    for leg in legs:
+        prev = out[-1] if out else None
+        if prev is not None and leg["start"] - prev["end"] < timedelta(hours=p.trip_chain_gap_h) and leg["start"] >= prev["start"]:
+            same = leg["address"] == prev["address"]
+            hop = 0.0 if same else _hop_km(prev["coords"], leg["coords"])
+            prev["km"] = round(prev["km"] - prev["km_rueck"] + hop + leg["km_rueck"], 1)
+            prev["km_rueck"] = leg["km_rueck"]
+            prev["summary"] = f"{prev['summary']} + {leg['summary']}"
+            prev["end"], prev["rueckkehr"] = leg["end"], max(prev["rueckkehr"], leg["rueckkehr"])
+            prev["address"], prev["coords"], prev["kette"] = leg["address"], leg["coords"], True
+        else:
+            out.append({**leg, "kette": False})
+    for trip in out:
+        trip["kwh"] = round(trip["km"] * p.car_kwh_per_100km / 100.0, 1)
+    return out
+
+
+def with_routes(
+    visits: list[dict[str, Any]], routes: dict[str, dict[str, Any]], slots: list[datetime], p: Params
+) -> list[dict[str, Any]]:
+    """Fahrten im Planfenster samt Slot-Indizes."""
+    step = timedelta(minutes=SLOT_MIN)
+    out = []
+    for trip in build_trips(visits, routes, p):
+        if trip["abfahrt"] < slots[0] or trip["abfahrt"] >= slots[-1] + step:
             continue
-        dep_idx = int((depart - slots[0]) / step)
-        back_idx = min(len(slots), int((back - slots[0]) / step) + 1)
         out.append({
-            **trip, "km": route["km"], "fahrzeit_min": round(route["min"]),
-            "abfahrt": depart, "rueckkehr": back, "dep_index": dep_idx, "back_index": back_idx,
-            "kwh": round(2 * route["km"] * p.car_kwh_per_100km / 100.0, 1),
+            **trip, "dep_index": int((trip["abfahrt"] - slots[0]) / step),
+            "back_index": min(len(slots), int((trip["rueckkehr"] - slots[0]) / step) + 1),
         })
     return out
+
+
+def later_trips(
+    visits: list[dict[str, Any]], routes: dict[str, dict[str, Any]], slots: list[datetime], p: Params
+) -> list[dict[str, Any]]:
+    """Fahrten nach dem Planfenster (bis 7 Tage): nur zur Anzeige des Ladebedarfs."""
+    end = slots[-1] + timedelta(minutes=SLOT_MIN)
+    return [
+        {"summary": t["summary"], "abfahrt": t["abfahrt"].isoformat(), "km": t["km"], "kwh": t["kwh"]}
+        for t in build_trips(visits, routes, p) if t["abfahrt"] >= end
+    ]
 
 
 def learn_consumption(
@@ -145,6 +233,7 @@ def events_from_objects(objects: Any) -> list[dict[str, Any]]:
             "end": end.date().isoformat() if all_day else end.isoformat(),
             "summary": getattr(obj, "subject", "") or "",
             "location": location_text(getattr(obj, "location", None)),
+            "description": str(getattr(obj, "body", "") or ""),
             "coords": location_coords(getattr(obj, "location", None)),
             "shape": location_shape(getattr(obj, "location", None)),
         })

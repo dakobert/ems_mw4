@@ -107,6 +107,7 @@ def plan_car_trips(
     for trip in sorted(trips, key=lambda t: t["dep_index"]):
         dep, back = trip["dep_index"], trip["back_index"]
         entry = {k: trip[k] for k in ("summary", "address", "km", "fahrzeit_min", "kwh")}
+        entry["kette"] = bool(trip.get("kette"))
         entry.update({"abfahrt": trip["abfahrt"].isoformat(), "rueckkehr": trip["rueckkehr"].isoformat()})
         if soc is None:
             entry["fehlt_kwh"] = None
