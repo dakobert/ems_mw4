@@ -132,6 +132,7 @@ def plan_battery(prices: list[float], net_kw: list[float], soc_pct: float, p: Pa
                     grid = net + d * step * p.battery_eff_discharge
                     wear = -d * step * p.battery_wear_ct
                 cost = (grid * price if grid > 0 else grid * p.feed_in_ct) + wear + value[lvl + d]
+                cost -= 1e-4 * abs(d) * (n - t) / n  # bei Gleichstand früher handeln
                 if cost < best - 1e-7:
                     best, best_d = cost, d
             new_value[lvl], new_choice[lvl] = best, best_d

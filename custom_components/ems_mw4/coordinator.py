@@ -89,6 +89,7 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.heat_w_per_k: float = self.params.heat_w_per_k
         self.heat_fit_days: int = 0
         self._model_day: Any = None
+        self._replanning = False
 
     def entity_for(self, key: str) -> str:
         """Quell-Entität für einen Schlüssel: Einstellung oder Vorgabe."""
@@ -160,6 +161,9 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._track_cost(now, data.get("grid_power"), data.get("price"))
         data[KEY_SOURCES_OK] = len(SOURCES) + 1 - len(missing)
         data[KEY_SAMPLES] = len(self.samples)
+        if self.plan is None and not self._replanning and data.get("battery_soc") is not None and self.data:
+            # nach dem Start: Plan nachholen, sobald der Speicher-Ladestand vorliegt
+            self.config_entry.async_create_background_task(self.hass, self.async_replan(), "ems_mw4_plan_nachholen")
         return data
 
     @callback
@@ -236,11 +240,16 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     async def async_replan(self, _now: datetime | None = None) -> None:
         """Plan neu rechnen. Fehlen Preise oder Ladestand, bleibt der letzte Plan stehen."""
+        if self._replanning:
+            return
+        self._replanning = True
         try:
             await self._async_replan()
         except Exception:  # noqa: BLE001 - der Planer darf die Integration nie mitreißen
             _LOGGER.exception("Planrechnung fehlgeschlagen")
             self.plan_status = "Fehler in der Planrechnung"
+        finally:
+            self._replanning = False
         self.async_update_listeners()
 
     async def _async_replan(self) -> None:

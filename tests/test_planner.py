@@ -148,3 +148,11 @@ def test_build_plan_complete_and_fast():
     for i in range(N):
         if plan["car_kw"][i] > 0 and plan["car_grid_kw"][i] == 0:
             assert plan["grid_kw"][i] <= 1e-6
+
+
+def test_battery_charges_pv_early_on_tie():
+    prices = [35.0] * N
+    net = [-3.0 if 10 <= s.hour < 17 else 0.3 for s in SLOTS]
+    plan = plan_battery(prices, net, 30.0, P)
+    first_surplus = next(i for i, s in enumerate(SLOTS) if s.hour == 10)
+    assert plan["battery_kw"][first_surplus] < -2.0  # lädt sofort, nicht erst am Nachmittag
