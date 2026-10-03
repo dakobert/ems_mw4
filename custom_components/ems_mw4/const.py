@@ -66,3 +66,46 @@ SOURCE_BY_KEY = {s.key: s for s in SOURCES}
 KEY_ROOM_TEMP = "room_temp"
 KEY_SOURCES_OK = "sources_ok"
 KEY_SAMPLES = "samples"
+
+# --- Phase 2: Prognose, Planer, Kosten ---
+SLOT_MIN = 15
+SLOT_H = SLOT_MIN / 60
+HORIZON_SLOTS = 48 * 4
+PLAN_MINUTES = (0, 15, 30, 45)
+COST_STORE_KEY = f"{DOMAIN}.kosten"
+
+CONF_WEATHER = "weather_entity"
+DEFAULT_WEATHER = "weather.menslage"
+PV_FORECAST_KEYS = ("pv_fc_today", "pv_fc_tomorrow", "pv_fc_day_after")
+
+KEY_PLAN = "plan"
+
+
+@dataclass(frozen=True)
+class Params:
+    """Startwerte des Planers. Werden in Phase 3 zu Einstellungen."""
+
+    battery_kwh: float = 12.5
+    battery_min_soc: float = 5.0
+    battery_charge_kw: float = 5.0
+    battery_charge_kw_high: float = 3.5  # oberhalb von 80 %
+    battery_discharge_kw: float = 5.0
+    battery_eff_charge: float = 0.906  # hin und zurück rund 82 %
+    battery_eff_discharge: float = 0.906
+    battery_wear_ct: float = 2.0  # je entladener kWh
+    battery_step_kwh: float = 0.02
+    feed_in_ct: float = 6.9
+    heat_limit_c: float = 15.0
+    heat_w_per_k: float = 60.0  # elektrisch, Startwert bis genug Daten vorliegen
+    dhw_kwh: float = 1.5
+    dhw_kw: float = 2.0
+    dhw_skip_above_c: float = 48.0
+    car_kwh: float = 64.7
+    car_kw: float = 11.0
+    car_min_kw: float = 1.4
+    car_target_soc: float = 100.0
+    car_reserve_soc: float = 20.0
+    car_cheap_quantile: float = 0.10
+    car_cheap_below_mean_ct: float = 6.0
+    base_load_default_w: float = 350.0
+    fixed_fee_eur_day: float = 0.46

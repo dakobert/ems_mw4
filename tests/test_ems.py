@@ -132,3 +132,107 @@ async def test_options_flow(hass: HomeAssistant) -> None:
     await hass.async_block_till_done()
     assert entry.runtime_data.data["pv_power"] == 777.0
     assert entry.runtime_data.data["room_temp"] == 20.5
+
+
+# ---------- Phase 2 ----------
+
+from datetime import datetime  # noqa: E402
+from unittest.mock import patch  # noqa: E402
+
+BASE = "custom_components.ems_mw4.data"
+
+
+def _prices(now):
+    start = now.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=1)
+    return {start + timedelta(minutes=15 * i): 30.0 + (10.0 if 68 <= i % 96 < 84 else 0.0) for i in range(3 * 96)}
+
+
+async def _replan(hass, entry, prices=None, temps=None, stats=None):
+    now = dt_util.now()
+    with (
+        patch(f"{BASE}.async_fetch_prices", return_value=_prices(now) if prices is None else prices),
+        patch(f"{BASE}.async_fetch_temperatures", return_value=temps or {}),
+        patch(f"{BASE}.async_fetch_hourly_means", return_value=stats or {}),
+    ):
+        await entry.runtime_data.async_replan()
+        await hass.async_block_till_done()
+
+
+async def test_plan_built_and_sensors(hass: HomeAssistant) -> None:
+    _fill(hass)
+    hass.states.async_set("sensor.hostname_scb_4fa5bb_battery_soc", "40")
+    hass.states.async_set("sensor.ix1_xdrive30_battery_hv_state_of_charge", "80")
+    hass.states.async_set("sensor.none_prognose_heute", "20", {"hours": {f"{h:02d}:00": 3.0 for h in range(10, 16)}})
+    entry = await _setup(hass)
+    c = entry.runtime_data
+    await c.async_refresh()
+    await _replan(hass, entry)
+    assert c.plan is not None and len(c.plan["slots"]) == 192
+    assert c.plan_status.startswith("ok")
+    assert hass.states.get("sensor.ems_mw4_plan").state.startswith("ok")
+    assert len(hass.states.get("sensor.ems_mw4_plan").attributes["preis_ct"]) == 192
+    battery = hass.states.get("sensor.ems_mw4_plan_speicher")
+    assert battery.state in ("Netzladen", "PV-Laden", "Entladen", "Halten", "Leerlauf")
+    assert battery.attributes["begruendung"]
+    assert hass.states.get("sensor.ems_mw4_netzbezug_kosten_prognose_morgen").state not in ("unknown", "unavailable")
+
+
+async def test_plan_kept_without_prices_or_soc(hass: HomeAssistant) -> None:
+    _fill(hass)
+    entry = await _setup(hass)
+    c = entry.runtime_data
+    await _replan(hass, entry)
+    first = c.plan
+    assert first is not None
+    await _replan(hass, entry, prices={})
+    assert c.plan is first and "keine Preise" in c.plan_status
+    hass.states.async_set("sensor.hostname_scb_4fa5bb_battery_soc", "unavailable")
+    await c.async_refresh()
+    await _replan(hass, entry)
+    assert c.plan is first and "Ladestand" in c.plan_status
+
+
+async def test_replan_survives_exception(hass: HomeAssistant) -> None:
+    _fill(hass)
+    entry = await _setup(hass)
+    with patch(f"{BASE}.async_fetch_prices", side_effect=RuntimeError("kaputt")):
+        await entry.runtime_data.async_replan()
+    assert entry.runtime_data.plan_status == "Fehler in der Planrechnung"
+
+
+async def test_cost_tracking(hass: HomeAssistant) -> None:
+    _fill(hass)
+    entry = await _setup(hass)
+    c = entry.runtime_data
+    t0 = dt_util.utcnow()
+    c.costs.clear()
+    c._last_cost_time = None
+    c._track_cost(t0, 2000.0, 40.0)  # erster Aufruf: nur Zeit merken
+    c._track_cost(t0 + timedelta(seconds=60), 2000.0, 40.0)
+    day = dt_util.as_local(t0 + timedelta(seconds=60)).date().isoformat()
+    assert abs(c.costs[day]["kwh"] - 2.0 / 60) < 1e-4
+    assert abs(c.costs[day]["eur"] - 2.0 / 60 * 0.40) < 1e-4
+    before = dict(c.costs[day])
+    c._track_cost(t0 + timedelta(seconds=120), -3000.0, 40.0)  # Einspeisung kostet nichts
+    c._track_cost(t0 + timedelta(seconds=180), None, 40.0)  # fehlender Wert
+    c._track_cost(t0 + timedelta(hours=2), 2000.0, 40.0)  # Lücke wird nicht geschätzt
+    assert c.costs[day] == before or len(c.costs) == 2
+    assert c.cost_sum([day]) == round(before["eur"], 2)
+
+
+async def test_models_from_stats(hass: HomeAssistant) -> None:
+    _fill(hass)
+    entry = await _setup(hass)
+    c = entry.runtime_data
+    start = dt_util.utcnow().replace(minute=0, second=0, microsecond=0) - timedelta(days=30)
+    hours = [start + timedelta(hours=h) for h in range(30 * 24)]
+    stats = {
+        c.entity_for("home_power"): {h: 1500.0 for h in hours},
+        c.entity_for("hp_power"): {h: 0.8 for h in hours},  # kW
+        c.entity_for("wallbox_power"): {h: 200.0 for h in hours},
+        c.entity_for("outdoor_temp"): {h: 5.0 for h in hours},
+    }
+    await _replan(hass, entry, stats=stats)
+    assert len(c.base_profile) == 48
+    assert abs(next(iter(c.base_profile.values())) - 500.0) < 1e-6  # 1500 - 800 - 200
+    assert abs(c.heat_w_per_k - 80.0) < 1e-6 and c.heat_fit_days >= 14

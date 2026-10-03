@@ -1,4 +1,4 @@
-"""EMS MW4 – Energiemanagement. Phase 1: Datensammler und Rohdaten, keine Steuerung."""
+"""EMS MW4 – Energiemanagement. Datensammler, Prognose, Plan und Kosten. Keine Steuerung."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.event import async_track_time_change
 
-from .const import SAMPLE_MINUTES
+from .const import PLAN_MINUTES, SAMPLE_MINUTES
 from .coordinator import EmsCoordinator
 
 PLATFORMS: list[Platform] = [Platform.SENSOR]
@@ -27,6 +27,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: EmsConfigEntry) -> bool:
             hass, coordinator.async_take_sample, minute=list(SAMPLE_MINUTES), second=5
         )
     )
+    entry.async_on_unload(
+        async_track_time_change(hass, coordinator.async_replan, minute=list(PLAN_MINUTES), second=20)
+    )
+    entry.async_create_background_task(hass, coordinator.async_replan(), "ems_mw4_erster_plan")
     entry.async_on_unload(entry.add_update_listener(_async_reload))
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
