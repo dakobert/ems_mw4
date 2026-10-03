@@ -457,6 +457,13 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         await self.hass.services.async_call(
             "homeassistant", "update_entity", {"entity_id": [CONF_ROUTE_DISTANCE, CONF_ROUTE_DURATION]}, blocking=True
         )
+        import asyncio
+
+        for _ in range(15):  # der Dienst verzögert Abfragen bis zu 10 s nach der vorigen
+            after = self.hass.states.get(CONF_ROUTE_DISTANCE)
+            if after is not None and after.last_reported > before.last_reported:
+                break
+            await asyncio.sleep(1)
         after, duration = self.hass.states.get(CONF_ROUTE_DISTANCE), self.hass.states.get(CONF_ROUTE_DURATION)
         if after is None or duration is None or after.last_reported <= before.last_reported:
             return None  # keine neue Antwort: alten Wert nicht fälschlich dieser Adresse zuordnen
