@@ -109,3 +109,47 @@ class Params:
     car_cheap_below_mean_ct: float = 6.0
     base_load_default_w: float = 350.0
     fixed_fee_eur_day: float = 0.46
+
+# --- Phase 3/5: Einstellungen und Ausführer ---
+EXEC_INTERVAL_S = 30
+PLAN_MAX_AGE_S = 45 * 60
+MODBUS_HUB = "Kostal-BYD"
+MODBUS_SLAVE = 71
+MODBUS_BATTERY_SETPOINT = 1034
+
+CONF_SG_INPUT_1 = "switch.stiebel_eltron_isg_sg_ready_input_1"
+CONF_SG_INPUT_2 = "switch.stiebel_eltron_isg_sg_ready_input_2"
+CONF_GOE_FRC = "select.go_echarger_216292_frc"
+CONF_GOE_AMP = "number.go_echarger_216292_amp"
+CONF_GOE_PSM = "select.go_echarger_216292_psm"
+
+SWITCH_MASTER = "master"
+SWITCH_BATTERY = "auto_battery"
+SWITCH_DHW = "auto_dhw"
+SWITCH_WALLBOX = "auto_wallbox"
+
+
+@dataclass(frozen=True)
+class Setting:
+    """Einstellbarer Parameter des Planers."""
+
+    key: str  # Feldname in Params
+    name: str
+    minimum: float
+    maximum: float
+    step: float
+    unit: str | None
+    icon: str
+
+
+SETTINGS: tuple[Setting, ...] = (
+    Setting("battery_min_soc", "Speicher Mindest-Ladestand", 5, 50, 1, "%", "mdi:battery-low"),
+    Setting("battery_wear_ct", "Speicher Verschleißansatz", 0, 10, 0.5, "ct/kWh", "mdi:battery-heart-variant"),
+    Setting("feed_in_ct", "Einspeisevergütung", 0, 20, 0.1, "ct/kWh", "mdi:transmission-tower-export"),
+    Setting("car_target_soc", "Auto Ladeziel", 50, 100, 5, "%", "mdi:car-electric"),
+    Setting("car_reserve_soc", "Auto Grundreserve", 0, 50, 5, "%", "mdi:car-battery"),
+    Setting("car_cheap_below_mean_ct", "Auto sehr günstig: Abstand zum Mittel", 0, 20, 0.5, "ct/kWh", "mdi:cash-minus"),
+    Setting("dhw_kwh", "Warmwasser Energie je Ladung", 0.5, 4, 0.1, "kWh", "mdi:water-boiler"),
+    Setting("dhw_skip_above_c", "Warmwasser: heute keine Ladung ab", 38, 60, 1, "°C", "mdi:thermometer-water"),
+    Setting("heat_limit_c", "Heizgrenze", 10, 20, 0.5, "°C", "mdi:thermometer-lines"),
+)

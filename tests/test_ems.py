@@ -236,3 +236,102 @@ async def test_models_from_stats(hass: HomeAssistant) -> None:
     assert len(c.base_profile) == 48
     assert abs(next(iter(c.base_profile.values())) - 500.0) < 1e-6  # 1500 - 800 - 200
     assert abs(c.heat_w_per_k - 80.0) < 1e-6 and c.heat_fit_days >= 14
+
+
+# ---------- Einstellungen und Ausführer ----------
+
+from homeassistant.core import ServiceCall  # noqa: E402
+from pytest_homeassistant_custom_component.common import async_mock_service  # noqa: E402
+
+from custom_components.ems_mw4 import executor as ex  # noqa: E402
+from custom_components.ems_mw4.const import Params  # noqa: E402
+
+
+def test_float_words() -> None:
+    assert ex.float_words(-500.0) == [0, 50170]  # im Feldtest am 03.10.2026 so geschrieben
+    assert ex.float_words(0) == [0, 0]
+    assert ex.float_words(-5376.0) == [0, 50600]
+
+
+def test_car_setpoint() -> None:
+    assert ex.car_setpoint(11.0) == ("three_phases", 16)
+    assert ex.car_setpoint(4.2) == ("three_phases", 6)
+    assert ex.car_setpoint(2.3) == ("one_phase", 10)
+    assert ex.car_setpoint(1.4) == ("one_phase", 6)
+
+
+def _mini_plan(action, batt_kw, dhw=0.0, car=0.0):
+    return {"battery_action": [action], "battery_kw": [batt_kw], "dhw_kw": [dhw], "car_kw": [car]}
+
+
+def test_decide() -> None:
+    p = Params()
+    ok = {"battery_soc": 50.0, "grid_power": 100.0, "dhw_temp": 45.0, "sg_ready": 2.0, "car_connected": 1.0, "wallbox_power": 0.0}
+    d = ex.decide(_mini_plan("Netzladen", -3.0), 0, ok, 60, 2700, p)
+    assert d["battery_w"] == -3000 and d["grund"] is None
+    assert ex.decide(_mini_plan("Netzladen", -9.0), 0, ok, 60, 2700, p)["battery_w"] == -5000  # gedeckelt
+    assert ex.decide(_mini_plan("Halten", 0.0), 0, ok, 60, 2700, p)["battery_w"] == 0
+    for action in ("PV-Laden", "Entladen", "Leerlauf"):
+        assert ex.decide(_mini_plan(action, 1.0), 0, ok, 60, 2700, p)["battery_w"] is None  # Kostal regelt
+    # fehlende Messwerte, alter oder fehlender Plan: nichts schreiben
+    assert ex.decide(_mini_plan("Netzladen", -3.0), 0, {**ok, "battery_soc": None}, 60, 2700, p)["battery_w"] is None
+    assert ex.decide(_mini_plan("Netzladen", -3.0), 0, ok, 5000, 2700, p)["grund"] == "Plan veraltet"
+    assert ex.decide(None, None, ok, None, 2700, p)["grund"] == "kein Plan"
+    d = ex.decide(_mini_plan("Leerlauf", 0.0, dhw=2.0, car=11.0), 0, ok, 60, 2700, p)
+    assert d["dhw"] is True and d["car"] == {"frc": "charge", "psm": "three_phases", "amp": 16}
+    d = ex.decide(_mini_plan("Leerlauf", 0.0), 0, ok, 60, 2700, p)
+    assert d["dhw"] is False and d["car"] == {"frc": "dont_charge"}
+    d = ex.decide(_mini_plan("Leerlauf", 0.0, car=11.0), 0, {**ok, "car_connected": 0.0, "sg_ready": None}, 60, 2700, p)
+    assert d["car"] is None and d["dhw"] is None
+
+
+async def test_executor_shadow_writes_nothing(hass: HomeAssistant) -> None:
+    _fill(hass)
+    entry = await _setup(hass)
+    c = entry.runtime_data
+    calls = async_mock_service(hass, "modbus", "write_register")
+    sw = async_mock_service(hass, "switch", "turn_on")
+    await _replan(hass, entry)
+    c.plan["battery_action"] = ["Netzladen"] * 192
+    c.plan["battery_kw"] = [-3.0] * 192
+    await c.async_execute()
+    assert c.switches["master"] is False
+    assert calls == [] and sw == []
+    assert c.intent["battery_w"] == -3000
+    assert hass.states.get("sensor.ems_mw4_ausfuhrer").state == "Schattenbetrieb"
+    assert hass.states.get("switch.ems_mw4_steuerung_aktiv").state == "off"
+
+
+async def test_executor_active_writes_battery_and_respects_device_switch(hass: HomeAssistant) -> None:
+    _fill(hass)
+    hass.states.async_set("sensor.hostname_scb_4fa5bb_battery_soc", "50")
+    entry = await _setup(hass)
+    c = entry.runtime_data
+    await c.async_refresh()
+    calls = async_mock_service(hass, "modbus", "write_register")
+    await _replan(hass, entry)
+    c.plan["battery_action"] = ["Halten"] * 192
+    c.plan["dhw_kw"] = [0.0] * 192
+    c.plan["car_kw"] = [0.0] * 192
+    await hass.services.async_call("switch", "turn_on", {"entity_id": "switch.ems_mw4_steuerung_aktiv"}, blocking=True)
+    await hass.services.async_call("switch", "turn_off", {"entity_id": "switch.ems_mw4_automatik_wallbox"}, blocking=True)
+    await c.async_execute()
+    assert len(calls) == 1
+    assert calls[0].data == {"hub": "Kostal-BYD", "slave": 71, "address": 1034, "value": [0, 0]}
+    assert c.last_written == {"battery_w": 0, "dhw": False}
+    await hass.services.async_call("switch", "turn_off", {"entity_id": "switch.ems_mw4_automatik_speicher"}, blocking=True)
+    await c.async_execute()
+    assert len(calls) == 1  # Speicher-Automatik aus: kein weiterer Befehl
+
+
+async def test_setting_changes_params(hass: HomeAssistant) -> None:
+    _fill(hass)
+    entry = await _setup(hass)
+    c = entry.runtime_data
+    with patch(f"{BASE}.async_fetch_prices", return_value={}):
+        await hass.services.async_call(
+            "number", "set_value", {"entity_id": "number.ems_mw4_speicher_mindest_ladestand", "value": 15}, blocking=True
+        )
+        await hass.async_block_till_done()
+    assert c.params.battery_min_soc == 15.0
+    assert hass.states.get("number.ems_mw4_speicher_mindest_ladestand").state == "15.0"

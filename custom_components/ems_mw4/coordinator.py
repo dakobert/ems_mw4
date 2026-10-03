@@ -38,6 +38,11 @@ from .const import (  # noqa: I001
 )
 
 from .planner import build_plan
+from . import executor as ex
+from .const import (  # noqa: E402
+    CONF_GOE_AMP, CONF_GOE_FRC, CONF_GOE_PSM, CONF_SG_INPUT_1, CONF_SG_INPUT_2, MODBUS_BATTERY_SETPOINT,
+    MODBUS_HUB, MODBUS_SLAVE, PLAN_MAX_AGE_S, SWITCH_BATTERY, SWITCH_DHW, SWITCH_MASTER, SWITCH_WALLBOX,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -90,6 +95,11 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.heat_fit_days: int = 0
         self._model_day: Any = None
         self._replanning = False
+        # Ausführer: alles aus, bis ausdrücklich eingeschaltet
+        self.switches: dict[str, bool] = {SWITCH_MASTER: False, SWITCH_BATTERY: True, SWITCH_DHW: True, SWITCH_WALLBOX: True}
+        self.intent: dict[str, Any] = {"grund": "noch nicht gerechnet"}
+        self.last_written: dict[str, Any] = {}
+        self._psm_changes: list[datetime] = []
 
     def entity_for(self, key: str) -> str:
         """Quell-Entität für einen Schlüssel: Einstellung oder Vorgabe."""
@@ -297,3 +307,110 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if slot == current:
                 return i
         return None
+
+    # ---------- Einstellungen ----------
+
+    def set_param(self, key: str, value: float) -> None:
+        """Parameter ändern und neu planen."""
+        from dataclasses import replace
+
+        self.params = replace(self.params, **{key: value})
+        self._model_day = None if key == "heat_limit_c" else self._model_day
+        if self.data:
+            self.config_entry.async_create_background_task(self.hass, self.async_replan(), "ems_mw4_plan_einstellung")
+
+    # ---------- Ausführer ----------
+
+    async def async_execute(self, _now: datetime | None = None) -> None:
+        """Befehle aus dem Plan ableiten. Geschrieben wird nur bei aktiver Steuerung."""
+        try:
+            await self._async_execute()
+        except Exception:  # noqa: BLE001 - nie die Integration mitreißen; Geräte fallen selbst zurück
+            _LOGGER.exception("Ausführer fehlgeschlagen")
+            self.intent = {"grund": "Fehler im Ausführer"}
+        self.async_update_listeners()
+
+    async def _async_execute(self) -> None:
+        age = (dt_util.now() - self.plan_time).total_seconds() if self.plan_time else None
+        intent = ex.decide(self.plan, self.plan_index(), self.data or {}, age, PLAN_MAX_AGE_S, self.params)
+        self.intent = intent
+        written: dict[str, Any] = {}
+        if not self.switches[SWITCH_MASTER]:
+            self.last_written = {}
+            return
+        call = self.hass.services.async_call
+        # Speicher: alle 30 s neu schreiben, sonst übernimmt der Kostal nach 60 s
+        if self.switches[SWITCH_BATTERY] and intent.get("battery_w") is not None:
+            await call(
+                "modbus", "write_register",
+                {"hub": MODBUS_HUB, "slave": MODBUS_SLAVE, "address": MODBUS_BATTERY_SETPOINT,
+                 "value": ex.float_words(intent["battery_w"])},
+                blocking=True,
+            )
+            written["battery_w"] = intent["battery_w"]
+        # Warmwasser: SG Ready 3 = Eingang 1 an, Eingang 2 aus. Nur bei Änderung schreiben.
+        if self.switches[SWITCH_DHW] and intent.get("dhw") is not None:
+            want = "on" if intent["dhw"] else "off"
+            for entity_id, target in ((CONF_SG_INPUT_2, "off"), (CONF_SG_INPUT_1, want)):
+                state = self.hass.states.get(entity_id)
+                if state is not None and state.state in ("on", "off") and state.state != target:
+                    await call("switch", f"turn_{target}", {"entity_id": entity_id}, blocking=True)
+            written["dhw"] = intent["dhw"]
+        # Wallbox
+        if self.switches[SWITCH_WALLBOX] and intent.get("car") is not None:
+            written["car"] = await self._async_wallbox(intent["car"])
+        self.last_written = written
+
+    async def _async_wallbox(self, want: dict[str, Any]) -> dict[str, Any]:
+        """Wallbox setzen. Phasen nur ohne Last, höchstens alle 10 Minuten und 6-mal am Tag."""
+        call = self.hass.services.async_call
+        done: dict[str, Any] = {}
+
+        def current(entity_id: str) -> str | None:
+            state = self.hass.states.get(entity_id)
+            return None if state is None or state.state in ("unavailable", "unknown") else state.state
+
+        frc, psm, amp = current(CONF_GOE_FRC), current(CONF_GOE_PSM), current(CONF_GOE_AMP)
+        if frc is None:
+            return {"grund": "Wallbox nicht erreichbar"}
+        if want["frc"] == "dont_charge":
+            if frc != "dont_charge":
+                await call("select", "select_option", {"entity_id": CONF_GOE_FRC, "option": "dont_charge"}, blocking=True)
+                done["frc"] = "dont_charge"
+            return done
+        if psm is not None and psm != want["psm"]:
+            now = dt_util.utcnow()
+            self._psm_changes = [t for t in self._psm_changes if (now - t).total_seconds() < 86400]
+            too_soon = self._psm_changes and (now - self._psm_changes[-1]).total_seconds() < 600
+            if too_soon or len(self._psm_changes) >= 6:
+                want = {**want, "psm": psm}  # Phasen bleiben, Strom passend zur vorhandenen Phasenzahl
+                kw = self.plan["car_kw"][self.plan_index()]
+                phases = 1 if psm == "one_phase" else 3
+                want["amp"] = max(6, min(16, round(kw * 1000 / (phases * 230))))
+            elif (self.data.get("wallbox_power") or 0) > 50:
+                if frc != "dont_charge":
+                    await call("select", "select_option", {"entity_id": CONF_GOE_FRC, "option": "dont_charge"}, blocking=True)
+                return {"frc": "dont_charge", "grund": "Phasenwechsel: warte auf Strom 0"}
+            else:
+                await call("select", "select_option", {"entity_id": CONF_GOE_PSM, "option": want["psm"]}, blocking=True)
+                self._psm_changes.append(now)
+                return {"psm": want["psm"], "grund": "Phasen umgeschaltet, Laden im nächsten Schritt"}
+        if amp is not None and int(float(amp)) != want["amp"]:
+            await call("number", "set_value", {"entity_id": CONF_GOE_AMP, "value": want["amp"]}, blocking=True)
+            done["amp"] = want["amp"]
+        if frc != "charge":
+            await call("select", "select_option", {"entity_id": CONF_GOE_FRC, "option": "charge"}, blocking=True)
+            done["frc"] = "charge"
+        return done
+
+    async def async_release(self) -> None:
+        """Steuerung abgeben: Speicher fällt nach 60 s von selbst zurück, SG Ready normal, Wallbox neutral."""
+        call = self.hass.services.async_call
+        for entity_id in (CONF_SG_INPUT_1, CONF_SG_INPUT_2):
+            state = self.hass.states.get(entity_id)
+            if state is not None and state.state == "on":
+                await call("switch", "turn_off", {"entity_id": entity_id}, blocking=True)
+        state = self.hass.states.get(CONF_GOE_FRC)
+        if state is not None and state.state in ("charge", "dont_charge"):
+            await call("select", "select_option", {"entity_id": CONF_GOE_FRC, "option": "neutral"}, blocking=True)
+        self.last_written = {}

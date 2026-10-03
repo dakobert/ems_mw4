@@ -5,12 +5,14 @@ from __future__ import annotations
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.event import async_track_time_change
+from datetime import timedelta
 
-from .const import PLAN_MINUTES, SAMPLE_MINUTES
+from homeassistant.helpers.event import async_track_time_change, async_track_time_interval
+
+from .const import EXEC_INTERVAL_S, PLAN_MINUTES, SAMPLE_MINUTES
 from .coordinator import EmsCoordinator
 
-PLATFORMS: list[Platform] = [Platform.SENSOR]
+PLATFORMS: list[Platform] = [Platform.SENSOR, Platform.NUMBER, Platform.SWITCH]
 
 type EmsConfigEntry = ConfigEntry[EmsCoordinator]
 
@@ -29,6 +31,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: EmsConfigEntry) -> bool:
     )
     entry.async_on_unload(
         async_track_time_change(hass, coordinator.async_replan, minute=list(PLAN_MINUTES), second=20)
+    )
+    entry.async_on_unload(
+        async_track_time_interval(hass, coordinator.async_execute, timedelta(seconds=EXEC_INTERVAL_S))
     )
     entry.async_create_background_task(hass, coordinator.async_replan(), "ems_mw4_erster_plan")
     entry.async_on_unload(entry.add_update_listener(_async_reload))

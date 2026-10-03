@@ -134,6 +134,7 @@ def plan_entities(coordinator: EmsCoordinator, entry: EmsConfigEntry) -> list[Se
         EmsCostForecastSensor(coordinator, entry, "cost_fc_tomorrow", "Netzbezug Kosten Prognose morgen", 1),
         EmsImportSensor(coordinator, entry),
         EmsHeatModelSensor(coordinator, entry),
+        EmsExecutorSensor(coordinator, entry),
     ]
 
 
@@ -339,4 +340,29 @@ class EmsHeatModelSensor(EmsPlanBase):
             "tage_im_fit": self.coordinator.heat_fit_days,
             "heizgrenze_c": self.coordinator.params.heat_limit_c,
             "grundlast_profil_stunden": len(self.coordinator.base_profile),
+        }
+
+
+class EmsExecutorSensor(EmsPlanBase):
+    """Was der Ausführer tun würde bzw. tut."""
+
+    def __init__(self, coordinator: EmsCoordinator, entry: EmsConfigEntry) -> None:
+        super().__init__(coordinator, entry, "executor", "Ausführer")
+
+    @property
+    def native_value(self) -> str:
+        if self.coordinator.intent.get("grund"):
+            return self.coordinator.intent["grund"]
+        return "steuert" if self.coordinator.switches["master"] else "Schattenbetrieb"
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        intent = self.coordinator.intent
+        car = intent.get("car")
+        return {
+            "speicher": intent.get("battery"),
+            "speicher_sollwert_w": intent.get("battery_w"),
+            "warmwasser_laden": intent.get("dhw"),
+            "wallbox": car,
+            "geschrieben": self.coordinator.last_written,
         }
