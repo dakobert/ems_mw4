@@ -407,7 +407,7 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         for trip in found:
             route = self.routes.get(trip["address"])
             fresh = route is not None and datetime.fromisoformat(route["t"]) > stale
-            if not fresh and lookups < 2:
+            if not fresh and lookups < 1:  # der Fahrzeit-Dienst nimmt nur eine Abfrage je 10 s an
                 lookups += 1
                 new = await self._async_route(trip.get("coords"), now)
                 if new is not None:
