@@ -24,7 +24,10 @@ def parse_events(events: list[dict[str, Any]], now: datetime) -> list[dict[str, 
     trips = []
     for event in events:
         start, end, location = event.get("start"), event.get("end"), (event.get("location") or "").strip()
-        if not isinstance(start, str) or "T" not in start or not isinstance(end, str) or not is_address(location):
+        coords = event.get("coords")
+        if not isinstance(start, str) or "T" not in start or not isinstance(end, str):
+            continue
+        if not coords and not is_address(location):
             continue
         try:
             begin, finish = datetime.fromisoformat(start), datetime.fromisoformat(end)
@@ -32,7 +35,10 @@ def parse_events(events: list[dict[str, Any]], now: datetime) -> list[dict[str, 
             continue
         if begin <= now:
             continue
-        trips.append({"start": begin, "end": finish, "summary": event.get("summary") or "", "address": location})
+        trips.append({
+            "start": begin, "end": finish, "summary": event.get("summary") or "", "address": location or coords,
+            "coords": coords,
+        })
     return sorted(trips, key=lambda t: t["start"])
 
 
@@ -101,6 +107,29 @@ def location_text(location: Any) -> str:
     return str(location.get("displayName") or "").strip()
 
 
+def location_coords(location: Any) -> str | None:
+    """Koordinaten des Ortes als „Breite,Länge", wenn Microsoft sie mitliefert."""
+    if not isinstance(location, dict):
+        return None
+    point = location.get("coordinates") or {}
+    lat, lon = point.get("latitude"), point.get("longitude")
+    if isinstance(lat, (int, float)) and isinstance(lon, (int, float)) and (lat or lon):
+        return f"{lat},{lon}"
+    return None
+
+
+def location_shape(location: Any) -> dict[str, Any]:
+    """Aufbau des Ortsobjekts ohne Inhalte, nur zur Diagnose."""
+    if not isinstance(location, dict):
+        return {"typ": type(location).__name__}
+    address = location.get("address")
+    return {
+        "felder": sorted(location.keys()),
+        "adresse_felder": sorted(k for k, v in address.items() if v) if isinstance(address, dict) else None,
+        "koordinaten": location_coords(location) is not None,
+    }
+
+
 def events_from_objects(objects: Any) -> list[dict[str, Any]]:
     """Terminobjekte der Kalender-Integration in das einfache Format von parse_events übersetzen."""
     out = []
@@ -114,5 +143,7 @@ def events_from_objects(objects: Any) -> list[dict[str, Any]]:
             "end": end.date().isoformat() if all_day else end.isoformat(),
             "summary": getattr(obj, "subject", "") or "",
             "location": location_text(getattr(obj, "location", None)),
+            "coords": location_coords(getattr(obj, "location", None)),
+            "shape": location_shape(getattr(obj, "location", None)),
         })
     return out

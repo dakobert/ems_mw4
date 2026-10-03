@@ -115,6 +115,7 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.trip_destination: str | None = None
         self.trips: list[dict[str, Any]] = []
         self.trip_status: str = "noch nicht gelesen"
+        self.trip_shapes: list[dict[str, Any]] = []
         self.car_consumption: float = self.params.car_kwh_per_100km
         self.car_consumption_km: float = 0.0
         self._reminded: set[str] = set()
@@ -399,6 +400,7 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 blocking=True, return_response=True,
             )
             events = (response or {}).get(CONF_TRIP_CALENDAR, {}).get("events", [])
+        self.trip_shapes = [e["shape"] for e in events if e.get("shape") and e["shape"].get("felder")][:6]
         found = tr.parse_events(events, now)
         stale = now - timedelta(days=ROUTE_MAX_AGE_DAYS)
         lookups = 0
@@ -407,7 +409,7 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             fresh = route is not None and datetime.fromisoformat(route["t"]) > stale
             if not fresh and lookups < 2:
                 lookups += 1
-                new = await self._async_route(trip["address"], now)
+                new = await self._async_route(trip.get("coords"), now)
                 if new is not None:
                     self.routes[trip["address"]] = new
                     self._route_store.async_delay_save(lambda: {"routes": self.routes}, 5)
@@ -445,11 +447,11 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             _LOGGER.warning("Kalender direkt nicht lesbar, nutze den Standardweg", exc_info=True)
         return None
 
-    async def _async_route(self, address: str, now: datetime) -> dict[str, Any] | None:
+    async def _async_route(self, address: str | None, now: datetime) -> dict[str, Any] | None:
         """Entfernung und Fahrzeit über die Fahrzeit-Sensoren holen. Ziel ist der Sensor „Fahrtziel"."""
         before = self.hass.states.get(CONF_ROUTE_DISTANCE)
-        if before is None:
-            return None
+        if before is None or not address:
+            return None  # der Fahrzeit-Dienst braucht Koordinaten
         self.trip_destination = address
         self.async_update_listeners()
         await self.hass.services.async_call(

@@ -366,4 +366,9 @@ def test_location_from_microsoft_objects():
             NS(start=t0, end=t0, is_all_day=True, subject="Reise", location=full), NS(start=None, end=None)]
     events = tr.events_from_objects(objs)
     assert len(events) == 2 and events[0]["location"].endswith("33602 Bielefeld") and "T" not in events[1]["start"]
+    geo = {"displayName": "Halle", "coordinates": {"latitude": 52.02, "longitude": 8.53}}
+    assert tr.location_coords(geo) == "52.02,8.53" and tr.location_coords(full) is None
+    only = tr.events_from_objects([NS(start=t0, end=t0, is_all_day=False, subject="Kurs", location=geo)])
+    trip = tr.parse_events(only, datetime(2026, 10, 3, tzinfo=timezone.utc))[0]
+    assert trip["coords"] == "52.02,8.53" and trip["address"] == "Halle" and only[0]["shape"]["koordinaten"]
     assert len(tr.parse_events(events, datetime(2026, 10, 3, tzinfo=timezone.utc))) == 1
