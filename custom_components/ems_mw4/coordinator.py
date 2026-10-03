@@ -43,7 +43,9 @@ from .const import (  # noqa: E402
     CONF_GOE_AMP, CONF_GOE_FRC, CONF_GOE_PSM, CONF_SG_INPUT_1, CONF_SG_INPUT_2, MODBUS_BATTERY_SETPOINT,
     MODBUS_HUB, MODBUS_SLAVE, PLAN_MAX_AGE_S, SWITCH_BATTERY, SWITCH_DHW, SWITCH_MASTER, SWITCH_WALLBOX,
     BLOCK_LOG_STORE_KEY, NOTIFY_SERVICE, SWITCH_HEATING, SWITCH_HEAT_BLOCK, SWITCH_QUIET,
+    SWITCH_PROACTIVE, SWITCH_CURVE, CONF_COMFORT_TEMP, CONF_HEAT_CURVE, CONF_SUMMER_MODE, COMFORT_WRITE_GAP_S,
 )
+from . import thermal as th  # noqa: E402
 from datetime import time as dt_time  # noqa: E402
 
 _LOGGER = logging.getLogger(__name__)
@@ -101,7 +103,11 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.switches: dict[str, bool] = {
             SWITCH_MASTER: False, SWITCH_BATTERY: True, SWITCH_DHW: True, SWITCH_WALLBOX: True,
             SWITCH_HEATING: False, SWITCH_HEAT_BLOCK: False, SWITCH_QUIET: False,
+            SWITCH_PROACTIVE: False, SWITCH_CURVE: False,
         }
+        self.proactive: dict[str, Any] = {"shift_k": 0.0, "grund": "noch nicht gerechnet"}
+        self._comfort_written_at: datetime | None = None
+        self._comfort_touched = False
         self.quiet_start: dt_time = dt_time(23, 0)
         self.quiet_end: dt_time = dt_time(3, 0)
         self._block_store: Store[dict[str, Any]] = Store(hass, STORE_VERSION, BLOCK_LOG_STORE_KEY)
@@ -200,6 +206,9 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         for source in SOURCES:
             sample[source.key] = self.data.get(source.key)
         sample[KEY_ROOM_TEMP] = self.data.get(KEY_ROOM_TEMP)
+        sample["heat_shift"] = self.proactive.get("shift_k")
+        sample["heat_curve"] = self._number(CONF_HEAT_CURVE)
+        sample["heat_comfort"] = self._number(CONF_COMFORT_TEMP)
         i = self.plan_index()
         if i is not None:
             for key, name in (("grid_kw", "plan_grid_kw"), ("battery_kw", "plan_battery_kw"), ("soc", "plan_soc"),
@@ -319,6 +328,7 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             temps, self.data.get(KEY_ROOM_TEMP), self.quiet_slots(slots),
         )
         plan["temp_c"] = temps
+        self._update_proactive(temps)
         self.plan, self.plan_time = plan, now
         self.plan_status = "ok" if not any(estimated[:96]) else "ok, Preise teils geschätzt"
 
@@ -350,6 +360,54 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if slot == current:
                 return i
         return None
+
+    # ---------- Vorausschauend heizen ----------
+
+    def _number(self, entity_id: str) -> float | None:
+        state = self.hass.states.get(entity_id)
+        return to_number(state.state) if state is not None else None
+
+    def _update_proactive(self, temps: list[float | None]) -> None:
+        """Empfehlung für Komforttemperatur und Heizkurve neu rechnen (alle 15 Minuten mit dem Plan)."""
+        now = dt_util.utcnow()
+        p = self.params
+        adv = th.advise(
+            (self.data or {}).get(KEY_ROOM_TEMP), th.room_slope(self.samples, now, 12),
+            th.outdoor_past_mean(self.samples, now, 24), temps[: int(p.heat_lookahead_h * 4)], p,
+        )
+        curve = self._number(CONF_HEAT_CURVE)
+        recent = self.samples[-3 * 96 :]
+        steady = bool(recent) and all(s.get("heat_curve") == curve for s in recent)
+        history = [s["heat_shift"] for s in recent if s.get("heat_shift") is not None]
+        summer = self.hass.states.get(CONF_SUMMER_MODE)
+        adv.update({
+            "comfort_target_c": round(p.heat_comfort_base_c + adv["shift_k"], 1),
+            "comfort_now_c": self._number(CONF_COMFORT_TEMP),
+            "curve_now": curve,
+            "curve_target": th.curve_target(curve, history, p) if steady else None,
+            "sommerbetrieb": summer.state == STATE_ON if summer is not None else None,
+        })
+        self.proactive = adv
+
+    async def _async_proactive(self) -> dict[str, Any]:
+        """Komforttemperatur (höchstens alle 3 Stunden) und Heizkurve schreiben."""
+        written: dict[str, Any] = {}
+        adv, now = self.proactive, dt_util.utcnow()
+        call = self.hass.services.async_call
+        target, current = adv.get("comfort_target_c"), self._number(CONF_COMFORT_TEMP)
+        due = self._comfort_written_at is None or (now - self._comfort_written_at).total_seconds() >= COMFORT_WRITE_GAP_S
+        if target is not None and current is not None and adv.get("predicted_c") is not None:
+            if abs(target - current) >= 0.05 and due:
+                await call("number", "set_value", {"entity_id": CONF_COMFORT_TEMP, "value": target}, blocking=True)
+                self._comfort_written_at, self._comfort_touched = now, True
+                current = target
+            written["comfort_c"] = current
+        curve = adv.get("curve_target")
+        if self.switches[SWITCH_CURVE] and curve is not None and self._number(CONF_HEAT_CURVE) is not None:
+            await call("number", "set_value", {"entity_id": CONF_HEAT_CURVE, "value": curve}, blocking=True)
+            written["curve"] = curve
+            adv["curve_target"] = None
+        return written
 
     # ---------- Einstellungen ----------
 
@@ -402,6 +460,14 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             written["sg_ready"] = target
             if self.switches[SWITCH_DHW] and intent.get("dhw") is not None:
                 written["dhw"] = intent["dhw"]
+        if self.switches[SWITCH_HEATING] and self.switches[SWITCH_PROACTIVE]:
+            written.update(await self._async_proactive())
+        elif self._comfort_touched and self._number(CONF_COMFORT_TEMP) is not None:
+            await call(
+                "number", "set_value",
+                {"entity_id": CONF_COMFORT_TEMP, "value": self.params.heat_comfort_base_c}, blocking=True,
+            )
+            self._comfort_touched, self._comfort_written_at = False, None
         self._track_block(target, intent)
         await self._async_watch()
         # Wallbox
@@ -461,6 +527,12 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         state = self.hass.states.get(CONF_GOE_FRC)
         if state is not None and state.state in ("charge", "dont_charge"):
             await call("select", "select_option", {"entity_id": CONF_GOE_FRC, "option": "neutral"}, blocking=True)
+        if self._comfort_touched and self._number(CONF_COMFORT_TEMP) is not None:
+            await call(
+                "number", "set_value",
+                {"entity_id": CONF_COMFORT_TEMP, "value": self.params.heat_comfort_base_c}, blocking=True,
+            )
+            self._comfort_touched = False
         self.last_written = {}
 
     # ---------- Heizung: Ruhefenster, Sperrprotokoll, Wächter ----------

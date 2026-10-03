@@ -13,6 +13,8 @@ from homeassistant.helpers.restore_state import RestoreEntity
 from . import EmsConfigEntry
 from .const import (
     DOMAIN, NAME, SWITCH_BATTERY, SWITCH_DHW, SWITCH_HEAT_BLOCK, SWITCH_HEATING, SWITCH_MASTER, SWITCH_QUIET,
+    SWITCH_PROACTIVE,
+    SWITCH_CURVE,
     SWITCH_WALLBOX,
 )
 from .coordinator import EmsCoordinator
@@ -25,6 +27,8 @@ SWITCHES = (
     (SWITCH_HEATING, "Automatik Heizung", "mdi:heat-pump"),
     (SWITCH_HEAT_BLOCK, "Sperre in Preisspitzen", "mdi:cash-lock"),
     (SWITCH_QUIET, "Ruhefenster einmalig", "mdi:sleep"),
+    (SWITCH_PROACTIVE, "Vorausschauend heizen", "mdi:crystal-ball"),
+    (SWITCH_CURVE, "Heizkurve automatisch anpassen", "mdi:chart-bell-curve-cumulative"),
 )
 
 

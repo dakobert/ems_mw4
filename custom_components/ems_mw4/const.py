@@ -123,6 +123,15 @@ class Params:
     heat_block_frost_after_h: float = 6.0
     heat_preheat_h: float = 2.0
     heat_preheat_loss: float = 1.1  # Mehrverbrauch durch höhere Vorlauftemperatur beim Vorheizen
+    # Vorausschauend heizen (Fußbodenheizung ist träge)
+    heat_comfort_base_c: float = 22.0  # Komforttemperatur der Stiebel ohne Verschiebung
+    heat_lookahead_h: float = 24.0
+    heat_outdoor_coupling: float = 0.15  # K Raum je K Außentemperatur-Änderung über die Vorausschau
+    heat_shift_gain: float = 1.5
+    heat_shift_max_k: float = 2.0
+    heat_shift_min_k: float = 1.0
+    heat_curve_min: float = 0.35
+    heat_curve_max: float = 0.50
 
 # --- Phase 3/5: Einstellungen und Ausführer ---
 EXEC_INTERVAL_S = 30
@@ -144,6 +153,13 @@ SWITCH_WALLBOX = "auto_wallbox"
 SWITCH_HEATING = "auto_heating"
 SWITCH_HEAT_BLOCK = "heat_block"
 SWITCH_QUIET = "quiet_once"
+SWITCH_PROACTIVE = "heat_proactive"
+SWITCH_CURVE = "heat_curve_auto"
+CONF_COMFORT_TEMP = "number.stiebel_eltron_isg_comfort_temperature_target_hk1"
+CONF_HEAT_CURVE = "number.stiebel_eltron_isg_heating_curve_rise_hk1"
+CONF_SUMMER_MODE = "binary_sensor.stiebel_eltron_isg_is_in_summer_mode"
+COMFORT_WRITE_GAP_S = 3 * 3600
+CURVE_WRITE_GAP_S = 72 * 3600
 BLOCK_LOG_STORE_KEY = f"{DOMAIN}.sperren"
 NOTIFY_SERVICE = "mobile_app_iphone_von_roy"
 
@@ -172,6 +188,10 @@ SETTINGS: tuple[Setting, ...] = (
     Setting("dhw_skip_above_c", "Warmwasser: heute keine Ladung ab", 38, 60, 1, "°C", "mdi:thermometer-water"),
     Setting("heat_limit_c", "Heizgrenze", 10, 20, 0.5, "°C", "mdi:thermometer-lines"),
     Setting("room_target_c", "Raumtemperatur Soll", 18, 24, 0.5, "°C", "mdi:home-thermometer"),
+    Setting("heat_comfort_base_c", "Heizung: Komforttemperatur Grundwert", 18, 25, 0.5, "°C", "mdi:thermometer"),
+    Setting("heat_shift_max_k", "Heizung: größte Anhebung", 0, 3, 0.5, "K", "mdi:arrow-up-bold"),
+    Setting("heat_curve_min", "Heizkurve: kleinste Steilheit", 0.2, 1.0, 0.05, None, "mdi:chart-bell-curve-cumulative"),
+    Setting("heat_curve_max", "Heizkurve: größte Steilheit", 0.2, 1.0, 0.05, None, "mdi:chart-bell-curve-cumulative"),
     Setting("heat_block_max_h", "Sperre: längste Dauer", 0.5, 3, 0.25, "h", "mdi:timer-sand"),
     Setting("heat_block_gap_h", "Sperre: Mindestabstand", 2, 24, 1, "h", "mdi:timer-pause"),
     Setting("heat_block_min_adv_ct", "Sperre: Mindest-Preisvorteil", 2, 30, 0.5, "ct/kWh", "mdi:cash-check"),

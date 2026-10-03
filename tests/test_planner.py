@@ -257,3 +257,46 @@ def test_build_plan_with_heating():
                       _peak_prices(), PB, [5.0] * N, 21.0, None)
     assert "sperre" in plan["heat_mode"] and len(plan["heat_blocks"]) == 2
     assert plan["heat_forecast_kw"] == [1.0] * N
+
+
+# ---------- Vorausschauend heizen ----------
+
+def _room_samples(now, start_temp, slope, out=12.0, hours=24):
+    from datetime import timedelta
+    return [
+        {"t": (now - timedelta(minutes=15 * k)).isoformat(), "room_temp": start_temp - slope * k / 4, "outdoor_temp": out}
+        for k in range(hours * 4, -1, -1)
+    ]
+
+
+def test_proactive_raises_early_when_cooling():
+    from datetime import datetime, timezone
+    from custom_components.ems_mw4 import thermal as th
+    from custom_components.ems_mw4.const import Params
+    p = Params()
+    now = datetime(2026, 10, 20, 12, 0, tzinfo=timezone.utc)
+    samples = _room_samples(now, 21.4, -0.03)  # Raum fällt 0,03 K/h, liegt noch über Soll
+    slope = th.room_slope(samples, now, 12)
+    assert abs(slope + 0.03) < 0.002
+    adv = th.advise(21.4, slope, th.outdoor_past_mean(samples, now, 24), [5.0] * 96, p)
+    assert adv["predicted_c"] < p.room_target_c
+    assert 0.5 <= adv["shift_k"] <= p.heat_shift_max_k
+    # stabil und draußen gleich: keine Verschiebung
+    assert th.advise(21.4, 0.0, 12.0, [12.0] * 96, p)["shift_k"] == 0.0
+    # zu warm: absenken, höchstens 1 K
+    assert th.advise(23.5, 0.02, 12.0, [12.0] * 96, p)["shift_k"] == -1.0
+    # über der Heizgrenze und warm genug: nichts tun
+    assert th.advise(22.0, -0.01, 18.0, [18.0] * 96, p)["shift_k"] == 0.0
+    assert th.advise(None, None, None, [], p)["shift_k"] == 0.0
+
+
+def test_curve_follows_slowly_within_bounds():
+    from custom_components.ems_mw4 import thermal as th
+    from custom_components.ems_mw4.const import Params
+    p = Params()
+    assert th.curve_target(0.40, [1.5] * 288, p) == 0.45
+    assert th.curve_target(0.50, [1.5] * 288, p) is None  # Obergrenze
+    assert th.curve_target(0.40, [-1.0] * 288, p) == 0.35
+    assert th.curve_target(0.35, [-1.0] * 288, p) is None
+    assert th.curve_target(0.40, [0.5] * 288, p) is None
+    assert th.curve_target(0.40, [1.5] * 50, p) is None  # zu wenig Verlauf

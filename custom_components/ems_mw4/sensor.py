@@ -136,6 +136,7 @@ def plan_entities(coordinator: EmsCoordinator, entry: EmsConfigEntry) -> list[Se
         EmsHeatModelSensor(coordinator, entry),
         EmsExecutorSensor(coordinator, entry),
         EmsHeatPlanSensor(coordinator, entry),
+        EmsProactiveSensor(coordinator, entry),
     ]
 
 
@@ -396,4 +397,34 @@ class EmsHeatPlanSensor(EmsPlanBase):
             "sperre_erlaubt": self.coordinator.params.heat_block_enabled,
             "protokoll_anzahl": len(log),
             "protokoll_letzte": log[-5:],
+        }
+
+
+class EmsProactiveSensor(EmsPlanBase):
+    """Vorausschau: empfohlene Verschiebung der Komforttemperatur und erwartete Raumtemperatur."""
+
+    _attr_native_unit_of_measurement = "K"
+    _attr_icon = "mdi:crystal-ball"
+
+    def __init__(self, coordinator: EmsCoordinator, entry: EmsConfigEntry) -> None:
+        super().__init__(coordinator, entry, "heat_proactive", "Heizung Vorausschau")
+
+    @property
+    def native_value(self) -> float | None:
+        return self.coordinator.proactive.get("shift_k")
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        adv = self.coordinator.proactive
+        return {
+            "grund": adv.get("grund"),
+            "raum_erwartet_c": adv.get("predicted_c"),
+            "raum_trend_k_je_h": None if adv.get("slope_k_h") is None else round(adv["slope_k_h"], 3),
+            "aussen_zuletzt_c": None if adv.get("out_past_c") is None else round(adv["out_past_c"], 1),
+            "aussen_voraus_c": adv.get("out_ahead_c"),
+            "komfort_soll_c": adv.get("comfort_target_c"),
+            "komfort_ist_c": adv.get("comfort_now_c"),
+            "heizkurve_ist": adv.get("curve_now"),
+            "heizkurve_empfohlen": adv.get("curve_target"),
+            "sommerbetrieb": adv.get("sommerbetrieb"),
         }
