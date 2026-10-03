@@ -320,6 +320,8 @@ def test_trips_parse_and_plan():
     assert len(found) == 1 and tr.is_address("Weg 2, 01067 Dresden") and not tr.is_address("Büro")
     assert tr.with_routes(found, {}, SLOTS, P) == []  # ohne Strecke keine Fahrt
     routes = {found[0]["address"]: {"km": 50.0, "min": 45.0, "t": now.isoformat()}}
+    near = {found[0]["address"]: {"km": 4.9, "min": 8.0, "t": now.isoformat()}}
+    assert tr.with_routes(found, near, SLOTS, P) == []  # bis 5 km keine Fahrt
     trips = tr.with_routes(found, routes, SLOTS, P)
     assert trips[0]["kwh"] == 20.0 and trips[0]["dep_index"] == 76  # 20 h - 45 min - 15 min = 19 h
     prices = [40.0] * N

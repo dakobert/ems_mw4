@@ -52,6 +52,8 @@ def with_routes(
         route = routes.get(trip["address"])
         if not route or route.get("km") is None or route.get("min") is None:
             continue
+        if route["km"] <= p.trip_min_km or route["km"] > 600:
+            continue
         travel = timedelta(minutes=route["min"])
         depart = trip["start"] - travel - timedelta(minutes=p.trip_buffer_min)
         back = trip["end"] + travel

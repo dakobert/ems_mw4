@@ -110,6 +110,7 @@ class Params:
     car_cheap_quantile: float = 0.10
     car_kwh_per_100km: float = 20.0
     trip_buffer_min: float = 15.0
+    trip_min_km: float = 5.0  # näher gelegene Ziele zählen nicht als Fahrt
     car_cheap_below_mean_ct: float = 6.0
     base_load_default_w: float = 350.0
     fixed_fee_eur_day: float = 0.46
