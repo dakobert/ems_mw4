@@ -1,0 +1,43 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "EMS MW4 einrichten",
+        "description": "Legt den Datensammler an. Es wird nichts gesteuert."
+      }
+    },
+    "abort": {
+      "single_instance_allowed": "EMS MW4 ist bereits eingerichtet."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Datenquellen",
+        "description": "Entitäten, die EMS MW4 liest.",
+        "data": {
+          "pv_power": "PV-Leistung",
+          "grid_power": "Netzleistung",
+          "home_power": "Hausverbrauch",
+          "battery_power": "Speicherleistung",
+          "battery_soc": "Speicher Ladestand",
+          "hp_power": "Wärmepumpe Leistung",
+          "dhw_temp": "Warmwasser Temperatur",
+          "outdoor_temp": "Außentemperatur",
+          "flow_temp": "Heizkreis Temperatur",
+          "sg_ready": "SG-Ready-Zustand",
+          "compressor": "Verdichter",
+          "wallbox_power": "Wallbox Leistung",
+          "car_connected": "Auto angesteckt",
+          "car_soc": "Auto Ladestand",
+          "car_mileage": "Auto Kilometerstand",
+          "price": "Strompreis",
+          "pv_fc_today": "PV-Prognose heute",
+          "pv_fc_tomorrow": "PV-Prognose morgen",
+          "pv_fc_day_after": "PV-Prognose übermorgen",
+          "room_sensors": "Raumfühler für die Referenztemperatur"
+        }
+      }
+    }
+  }
+}
