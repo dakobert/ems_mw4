@@ -452,6 +452,8 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         before = self.hass.states.get(CONF_ROUTE_DISTANCE)
         if before is None or not address:
             return None  # der Fahrzeit-Dienst braucht Koordinaten
+        # Zeitstempel sichern: bei gleichem Wert ändert Home Assistant dasselbe Zustandsobjekt
+        stamp = before.last_reported
         self.trip_destination = address
         self.async_update_listeners()
         await self.hass.services.async_call(
@@ -461,11 +463,11 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         for _ in range(15):  # der Dienst verzögert Abfragen bis zu 10 s nach der vorigen
             after = self.hass.states.get(CONF_ROUTE_DISTANCE)
-            if after is not None and after.last_reported > before.last_reported:
+            if after is not None and after.last_reported > stamp:
                 break
             await asyncio.sleep(1)
         after, duration = self.hass.states.get(CONF_ROUTE_DISTANCE), self.hass.states.get(CONF_ROUTE_DURATION)
-        if after is None or duration is None or after.last_reported <= before.last_reported:
+        if after is None or duration is None or after.last_reported <= stamp:
             return None  # keine neue Antwort: alten Wert nicht fälschlich dieser Adresse zuordnen
         km, minutes = to_number(after.state), to_number(duration.state)
         if km is None or minutes is None:
