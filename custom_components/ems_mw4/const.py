@@ -108,6 +108,8 @@ class Params:
     pv_safety: float = 0.7  # Abschlag auf die PV-Prognose bei Auto-Entscheidungen
     car_after_battery_soc: float = 50.0  # PV-Überschuss: erst Speicher bis hier, dann Auto
     car_cheap_quantile: float = 0.10
+    car_kwh_per_100km: float = 20.0
+    trip_buffer_min: float = 15.0
     car_cheap_below_mean_ct: float = 6.0
     base_load_default_w: float = 350.0
     fixed_fee_eur_day: float = 0.46
@@ -159,6 +161,11 @@ CONF_COMFORT_TEMP = "number.stiebel_eltron_isg_comfort_temperature_target_hk1"
 CONF_HEAT_CURVE = "number.stiebel_eltron_isg_heating_curve_rise_hk1"
 CONF_SUMMER_MODE = "binary_sensor.stiebel_eltron_isg_is_in_summer_mode"
 COMFORT_WRITE_GAP_S = 3 * 3600
+CONF_TRIP_CALENDAR = "calendar.roy_conbus"
+CONF_ROUTE_DISTANCE = "sensor.here_travel_time_entfernung"
+CONF_ROUTE_DURATION = "sensor.here_travel_time_dauer"
+ROUTE_STORE_KEY = f"{DOMAIN}.strecken"
+ROUTE_MAX_AGE_DAYS = 30
 CURVE_WRITE_GAP_S = 72 * 3600
 BLOCK_LOG_STORE_KEY = f"{DOMAIN}.sperren"
 NOTIFY_SERVICE = "mobile_app_iphone_von_roy"
@@ -184,6 +191,8 @@ SETTINGS: tuple[Setting, ...] = (
     Setting("car_target_soc", "Auto Ladeziel", 50, 100, 5, "%", "mdi:car-electric"),
     Setting("car_reserve_soc", "Auto Grundreserve", 0, 50, 5, "%", "mdi:car-battery"),
     Setting("car_cheap_below_mean_ct", "Auto sehr günstig: Abstand zum Mittel", 0, 20, 0.5, "ct/kWh", "mdi:cash-minus"),
+    Setting("car_kwh_per_100km", "Auto Verbrauch", 12, 30, 0.5, "kWh/100 km", "mdi:speedometer"),
+    Setting("trip_buffer_min", "Fahrt: Puffer vor Abfahrt", 0, 60, 5, "min", "mdi:clock-start"),
     Setting("dhw_kwh", "Warmwasser Energie je Ladung", 0.5, 4, 0.1, "kWh", "mdi:water-boiler"),
     Setting("dhw_skip_above_c", "Warmwasser: heute keine Ladung ab", 38, 60, 1, "°C", "mdi:thermometer-water"),
     Setting("heat_limit_c", "Heizgrenze", 10, 20, 0.5, "°C", "mdi:thermometer-lines"),

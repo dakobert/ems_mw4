@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from homeassistant.components.sensor import SensorEntity, SensorStateClass
+from homeassistant.components.sensor import SensorDeviceClass, SensorEntity, SensorStateClass
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceEntryType, DeviceInfo
 from homeassistant.helpers.entity import EntityCategory
@@ -137,6 +137,8 @@ def plan_entities(coordinator: EmsCoordinator, entry: EmsConfigEntry) -> list[Se
         EmsExecutorSensor(coordinator, entry),
         EmsHeatPlanSensor(coordinator, entry),
         EmsProactiveSensor(coordinator, entry),
+        EmsTripDestinationSensor(coordinator, entry),
+        EmsTripSensor(coordinator, entry),
     ]
 
 
@@ -427,4 +429,41 @@ class EmsProactiveSensor(EmsPlanBase):
             "heizkurve_ist": adv.get("curve_now"),
             "heizkurve_empfohlen": adv.get("curve_target"),
             "sommerbetrieb": adv.get("sommerbetrieb"),
+        }
+
+
+class EmsTripDestinationSensor(EmsPlanBase):
+    """Adresse, für die gerade die Strecke abgefragt wird. Dient dem Fahrzeit-Sensor als Ziel."""
+
+    _attr_icon = "mdi:map-marker"
+
+    def __init__(self, coordinator: EmsCoordinator, entry: EmsConfigEntry) -> None:
+        super().__init__(coordinator, entry, "trip_destination", "Fahrtziel")
+
+    @property
+    def native_value(self) -> str | None:
+        return self.coordinator.trip_destination
+
+
+class EmsTripSensor(EmsPlanBase):
+    """Nächste Abfahrt aus dem Kalender und der Ladebedarf dafür."""
+
+    _attr_device_class = SensorDeviceClass.TIMESTAMP
+    _attr_icon = "mdi:car-clock"
+
+    def __init__(self, coordinator: EmsCoordinator, entry: EmsConfigEntry) -> None:
+        super().__init__(coordinator, entry, "trip_next", "Nächste Fahrt")
+
+    @property
+    def native_value(self) -> datetime | None:
+        trips = (self.coordinator.plan or {}).get("trips") or []
+        return datetime.fromisoformat(trips[0]["abfahrt"]) if trips else None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        trips = (self.coordinator.plan or {}).get("trips") or []
+        return {
+            "status": self.coordinator.trip_status,
+            "fahrten": [{k: v for k, v in t.items() if k != "address"} for t in trips],
+            "bekannte_strecken": len(self.coordinator.routes),
         }

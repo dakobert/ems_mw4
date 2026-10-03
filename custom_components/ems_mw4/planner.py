@@ -95,6 +95,42 @@ def plan_car_grid(
     return out, info
 
 
+def plan_car_trips(
+    prices: list[float], connected: bool, soc: float | None, trips: list[dict[str, Any]], p: Params
+) -> tuple[list[float], list[bool], list[dict[str, Any]]]:
+    """Laden für Fahrten aus dem Kalender: bis zur Abfahrt in den günstigsten Slots. Geht jeder anderen Regel vor."""
+    n = len(prices)
+    out, away, info = [0.0] * n, [False] * n, []
+    per_slot = p.car_kw * SLOT_H
+    reserve = p.car_reserve_soc / 100.0 * p.car_kwh
+    used = 0.0
+    for trip in sorted(trips, key=lambda t: t["dep_index"]):
+        dep, back = trip["dep_index"], trip["back_index"]
+        entry = {k: trip[k] for k in ("summary", "address", "km", "fahrzeit_min", "kwh")}
+        entry.update({"abfahrt": trip["abfahrt"].isoformat(), "rueckkehr": trip["rueckkehr"].isoformat()})
+        if soc is None:
+            entry["fehlt_kwh"] = None
+        else:
+            need = min(p.car_kwh, trip["kwh"] + reserve)
+            deficit = need - (soc / 100.0 * p.car_kwh + sum(out[:dep]) * SLOT_H - used)
+            if connected:
+                for i in sorted((i for i in range(dep) if not away[i]), key=lambda i: prices[i]):
+                    if deficit <= 1e-6:
+                        break
+                    room = per_slot - out[i] * SLOT_H
+                    if room <= 0:
+                        continue
+                    energy = min(room, deficit)
+                    out[i] += energy / SLOT_H
+                    deficit -= energy
+            entry["fehlt_kwh"] = round(max(0.0, deficit), 1)
+        for i in range(dep, min(n, back)):
+            away[i] = True
+        used += trip["kwh"]
+        info.append(entry)
+    return [round(v, 3) for v in out], away, info
+
+
 def plan_battery(prices: list[float], net_kw: list[float], soc_pct: float, p: Params) -> dict[str, list[float]]:
     """Speicherfahrplan per dynamischer Programmierung über den Ladestand.
 
@@ -256,7 +292,7 @@ def build_plan(
     base_kw: list[float], heat_kw: list[float], soc_pct: float, dhw_temp: float | None,
     car_connected: bool, car_soc: float | None, price_history: list[float], p: Params,
     temps: list[float | None] | None = None, room_temp: float | None = None,
-    quiet: tuple[int, int] | None = None,
+    quiet: tuple[int, int] | None = None, trips: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Gesamtplan für Heizung (Sperren, Ruhefenster), Warmwasser, Auto und Speicher."""
     n = len(slots)
@@ -271,6 +307,9 @@ def build_plan(
     battery_fill = max(0.0, (100.0 - soc_pct) / 100.0 * p.battery_kwh) / p.battery_eff_charge
     pv_for_car = max(0.0, raw_surplus * p.pv_safety - battery_fill)
     car_grid, car_info = plan_car_grid(slots, prices, car_connected, car_soc, price_history, p, pv_for_car)
+    # Fahrten aus dem Kalender gehen vor; unterwegs wird nicht geladen
+    car_trip, away, trip_info = plan_car_trips(prices, car_connected, car_soc, trips or [], p)
+    car_grid = [0.0 if away[i] else max(car_grid[i], car_trip[i]) for i in range(n)]
     net = [fixed[i] + dhw[i] + car_grid[i] for i in range(n)]
     batt = plan_battery(prices, net, soc_pct, p)
 
@@ -286,7 +325,7 @@ def build_plan(
                 if remaining <= 0:
                     break
                 surplus = -net[i]
-                if surplus >= p.car_min_kw and car_grid[i] == 0:
+                if surplus >= p.car_min_kw and car_grid[i] == 0 and not away[i]:
                     power = min(surplus, p.car_kw, remaining / SLOT_H)
                     car_pv[i] = round(power, 3)
                     remaining -= power * SLOT_H
@@ -323,6 +362,8 @@ def build_plan(
         "cost_eur": {k: round(v, 2) for k, v in cost_by_day.items()},
         "import_kwh": {k: round(v, 2) for k, v in kwh_by_day.items()},
         "car": car_info,
+        "trips": trip_info,
+        "car_away": away,
     }
 
 

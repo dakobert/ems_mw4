@@ -46,6 +46,10 @@ from .const import (  # noqa: E402
     SWITCH_PROACTIVE, SWITCH_CURVE, CONF_COMFORT_TEMP, CONF_HEAT_CURVE, CONF_SUMMER_MODE, COMFORT_WRITE_GAP_S,
 )
 from . import thermal as th  # noqa: E402
+from . import trips as tr  # noqa: E402
+from .const import (  # noqa: E402
+    CONF_ROUTE_DISTANCE, CONF_ROUTE_DURATION, CONF_TRIP_CALENDAR, ROUTE_MAX_AGE_DAYS, ROUTE_STORE_KEY,
+)
 from datetime import time as dt_time  # noqa: E402
 
 _LOGGER = logging.getLogger(__name__)
@@ -105,6 +109,13 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             SWITCH_HEATING: False, SWITCH_HEAT_BLOCK: False, SWITCH_QUIET: False,
             SWITCH_PROACTIVE: False, SWITCH_CURVE: False,
         }
+        self._route_store: Store[dict[str, Any]] = Store(hass, STORE_VERSION, ROUTE_STORE_KEY)
+        self.routes: dict[str, dict[str, Any]] = {}
+        self._routes_loaded = False
+        self.trip_destination: str | None = None
+        self.trips: list[dict[str, Any]] = []
+        self.trip_status: str = "noch nicht gelesen"
+        self._reminded: set[str] = set()
         self.proactive: dict[str, Any] = {"shift_k": 0.0, "grund": "noch nicht gerechnet"}
         self._comfort_written_at: datetime | None = None
         self._comfort_touched = False
@@ -322,13 +333,19 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         history = [s.get("price") for s in self.samples[-14 * 96 :] if s.get("price") is not None]
         if len(history) < 2 * 96:
             history = list(known.values())
+        try:
+            trips = await self._async_trips(now, slots)
+        except Exception:  # noqa: BLE001 - Kalender oder Fahrzeit dürfen den Plan nie verhindern
+            _LOGGER.exception("Fahrten konnten nicht gelesen werden")
+            trips, self.trip_status = [], "Fehler beim Lesen"
         plan = await self.hass.async_add_executor_job(
             build_plan, slots, prices, estimated, pv, base, heat, soc, self.data.get("dhw_temp"),
             self.data.get("car_connected") == 1.0, self.data.get("car_soc"), history, self.params,
-            temps, self.data.get(KEY_ROOM_TEMP), self.quiet_slots(slots),
+            temps, self.data.get(KEY_ROOM_TEMP), self.quiet_slots(slots), trips,
         )
         plan["temp_c"] = temps
         self._update_proactive(temps)
+        await self._async_trip_reminder(now)
         self.plan, self.plan_time = plan, now
         self.plan_status = "ok" if not any(estimated[:96]) else "ok, Preise teils geschätzt"
 
@@ -360,6 +377,71 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if slot == current:
                 return i
         return None
+
+    # ---------- Fahrten aus dem Kalender ----------
+
+    async def _async_trips(self, now: datetime, slots: list[datetime]) -> list[dict[str, Any]]:
+        """Termine mit Adresse lesen, fehlende Strecken abfragen (höchstens zwei je Lauf), Fahrten berechnen."""
+        if not self._routes_loaded:
+            self.routes = (await self._route_store.async_load() or {}).get("routes", {})
+            self._routes_loaded = True
+        if self.hass.states.get(CONF_TRIP_CALENDAR) is None or not self.hass.services.has_service("calendar", "get_events"):
+            self.trips, self.trip_status = [], "Kalender nicht verfügbar"
+            return []
+        response = await self.hass.services.async_call(
+            "calendar", "get_events", {"entity_id": CONF_TRIP_CALENDAR, "duration": {"hours": 48}},
+            blocking=True, return_response=True,
+        )
+        events = (response or {}).get(CONF_TRIP_CALENDAR, {}).get("events", [])
+        found = tr.parse_events(events, now)
+        stale = now - timedelta(days=ROUTE_MAX_AGE_DAYS)
+        lookups = 0
+        for trip in found:
+            route = self.routes.get(trip["address"])
+            fresh = route is not None and datetime.fromisoformat(route["t"]) > stale
+            if not fresh and lookups < 2:
+                lookups += 1
+                new = await self._async_route(trip["address"], now)
+                if new is not None:
+                    self.routes[trip["address"]] = new
+                    self._route_store.async_delay_save(lambda: {"routes": self.routes}, 5)
+        self.trips = tr.with_routes(found, self.routes, slots, self.params)
+        missing = sum(1 for t in found if t["address"] not in self.routes)
+        self.trip_status = f"{len(found)} Termine mit Adresse" + (f", {missing} ohne Strecke" if missing else "")
+        return self.trips
+
+    async def _async_route(self, address: str, now: datetime) -> dict[str, Any] | None:
+        """Entfernung und Fahrzeit über die Fahrzeit-Sensoren holen. Ziel ist der Sensor „Fahrtziel"."""
+        before = self.hass.states.get(CONF_ROUTE_DISTANCE)
+        if before is None:
+            return None
+        self.trip_destination = address
+        self.async_update_listeners()
+        await self.hass.services.async_call(
+            "homeassistant", "update_entity", {"entity_id": [CONF_ROUTE_DISTANCE, CONF_ROUTE_DURATION]}, blocking=True
+        )
+        after, duration = self.hass.states.get(CONF_ROUTE_DISTANCE), self.hass.states.get(CONF_ROUTE_DURATION)
+        if after is None or duration is None or after.last_reported <= before.last_reported:
+            return None  # keine neue Antwort: alten Wert nicht fälschlich dieser Adresse zuordnen
+        km, minutes = to_number(after.state), to_number(duration.state)
+        if km is None or minutes is None:
+            return None
+        return {"km": round(km, 1), "min": round(minutes, 1), "t": now.isoformat()}
+
+    async def _async_trip_reminder(self, now: datetime) -> None:
+        """Abends erinnern, wenn für eine Fahrt in den nächsten 16 Stunden Ladung fehlt und das Auto nicht angesteckt ist."""
+        if now.hour < 18 or (self.data or {}).get("car_connected") == 1.0:
+            return
+        for trip in (self.plan or {}).get("trips", []):
+            hours = (datetime.fromisoformat(trip["abfahrt"]) - now).total_seconds() / 3600.0
+            key = trip["abfahrt"]
+            if 0 < hours <= 16 and (trip.get("fehlt_kwh") or 0) > 0 and key not in self._reminded:
+                self._reminded.add(key)
+                if self.hass.services.has_service("notify", NOTIFY_SERVICE):
+                    await self.hass.services.async_call("notify", NOTIFY_SERVICE, {
+                        "title": "EMS MW4: Auto anstecken",
+                        "message": f"Für die Fahrt morgen fehlen {trip['fehlt_kwh']} kWh. Das Auto ist nicht angesteckt.",
+                    })
 
     # ---------- Vorausschauend heizen ----------
 

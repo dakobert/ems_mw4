@@ -300,3 +300,37 @@ def test_curve_follows_slowly_within_bounds():
     assert th.curve_target(0.35, [-1.0] * 288, p) is None
     assert th.curve_target(0.40, [0.5] * 288, p) is None
     assert th.curve_target(0.40, [1.5] * 50, p) is None  # zu wenig Verlauf
+
+
+# ---------- Fahrten aus dem Kalender ----------
+
+def test_trips_parse_and_plan():
+    from datetime import timedelta
+    from custom_components.ems_mw4 import trips as tr
+    from custom_components.ems_mw4.planner import plan_car_trips
+    now = SLOTS[0]
+    start = now + timedelta(hours=20)
+    events = [
+        {"start": start.isoformat(), "end": (start + timedelta(hours=8)).isoformat(), "summary": "Kurs",
+         "location": "Musterstraße 1, 49074 Osnabrück"},
+        {"start": start.isoformat(), "end": start.isoformat(), "summary": "ohne Adresse", "location": "Herr Muster"},
+        {"start": "2026-10-05", "end": "2026-10-06", "summary": "ganztägig", "location": "Weg 2, 01067 Dresden"},
+    ]
+    found = tr.parse_events(events, now)
+    assert len(found) == 1 and tr.is_address("Weg 2, 01067 Dresden") and not tr.is_address("Büro")
+    assert tr.with_routes(found, {}, SLOTS, P) == []  # ohne Strecke keine Fahrt
+    routes = {found[0]["address"]: {"km": 50.0, "min": 45.0, "t": now.isoformat()}}
+    trips = tr.with_routes(found, routes, SLOTS, P)
+    assert trips[0]["kwh"] == 20.0 and trips[0]["dep_index"] == 76  # 20 h - 45 min - 15 min = 19 h
+    prices = [40.0] * N
+    prices[10], prices[11] = 10.0, 12.0
+    prices[100] = 1.0  # billig, aber nach der Abfahrt
+    out, away, info = plan_car_trips(prices, True, 30.0, trips, P)
+    # Bedarf: 20 kWh + 20 % Reserve (12,94) - vorhanden (19,41) = 13,53 kWh
+    assert abs(sum(out) * SLOT_H - 13.53) < 0.01 and info[0]["fehlt_kwh"] == 0.0
+    assert out[10] > 0 and out[11] > 0 and out[100] == 0 and all(v == 0 for v in out[76:])
+    assert away[76] and away[80] and not away[75]
+    # genug geladen: nichts tun; nicht angesteckt: Bedarf melden
+    assert sum(plan_car_trips(prices, True, 80.0, trips, P)[0]) == 0
+    out, _, info = plan_car_trips(prices, False, 30.0, trips, P)
+    assert sum(out) == 0 and info[0]["fehlt_kwh"] == 13.5
