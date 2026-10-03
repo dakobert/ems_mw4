@@ -442,7 +442,9 @@ class EmsTripDestinationSensor(EmsPlanBase):
 
     @property
     def native_value(self) -> str | None:
-        return self.coordinator.trip_destination
+        # vor der ersten Abfrage das Zuhause, damit der Fahrzeit-Dienst gültige Koordinaten hat
+        home = f"{self.coordinator.hass.config.latitude},{self.coordinator.hass.config.longitude}"
+        return self.coordinator.trip_destination or home
 
 
 class EmsTripSensor(EmsPlanBase):

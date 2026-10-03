@@ -397,7 +397,14 @@ def test_trip_chain_allday_multiday_overnight():
     assert 14 < hop < 15 and abs(chain[0]["km"] - (50 + hop + 60)) < 0.1
     assert chain[0]["abfahrt"] == datetime(2026, 10, 5, 8, 5, tzinfo=tz)
     assert chain[0]["rueckkehr"] == datetime(2026, 10, 5, 14, 50, tzinfo=tz)
-    # 3 h Abstand: zwei Fahrten
+    # weit entfernt, 3 h Pause: Heimfahrt lohnt nicht -> Kette
+    far = {"A": {"km": 100.0, "min": 70.0, "t": ""}, "B": {"km": 120.0, "min": 80.0, "t": ""}}
+    long_gap = [
+        ev("2026-10-05T09:00:00+02:00", "2026-10-05T10:00:00+02:00", "A", a),
+        ev("2026-10-05T13:00:00+02:00", "2026-10-05T14:00:00+02:00", "B", b),
+    ]
+    assert len(tr.build_trips(tr.parse_events(long_gap, now), far, P)) == 1
+    # nah, 3 h Pause: zwei Fahrten
     two = tr.build_trips(tr.parse_events([
         ev("2026-10-05T09:00:00+02:00", "2026-10-05T10:00:00+02:00", "A", a),
         ev("2026-10-05T13:00:00+02:00", "2026-10-05T14:00:00+02:00", "B", b),

@@ -96,7 +96,7 @@ def _hop_km(a: str | None, b: str | None) -> float:
 
 
 def build_trips(visits: list[dict[str, Any]], routes: dict[str, dict[str, Any]], p: Params) -> list[dict[str, Any]]:
-    """Aufenthalte zu Fahrten: Abfahrt, Rückkehr, Energie. Termine mit unter 2 Stunden Abstand werden zur Kette."""
+    """Aufenthalte zu Fahrten: Abfahrt, Rückkehr, Energie. Lohnt die Heimfahrt zwischen zwei Terminen nicht, werden sie zur Kette."""
     legs = []
     for visit in visits:
         route = routes.get(visit["address"])
@@ -107,6 +107,7 @@ def build_trips(visits: list[dict[str, Any]], routes: dict[str, dict[str, Any]],
         travel = timedelta(minutes=route["min"])
         legs.append({
             **visit, "km_hin": route["km"], "km_rueck": route["km"], "fahrzeit_min": round(route["min"]),
+            "min_rueck": route["min"],
             "km": round(2 * route["km"], 1),
             "abfahrt": visit["depart_fixed"] or visit["start"] - travel - timedelta(minutes=p.trip_buffer_min),
             "rueckkehr": visit["back_fixed"] or visit["end"] + travel,
@@ -115,11 +116,16 @@ def build_trips(visits: list[dict[str, Any]], routes: dict[str, dict[str, Any]],
     out: list[dict[str, Any]] = []
     for leg in legs:
         prev = out[-1] if out else None
-        if prev is not None and leg["start"] - prev["end"] < timedelta(hours=p.trip_chain_gap_h) and leg["start"] >= prev["start"]:
+        # Kette, wenn eine Heimfahrt dazwischen weniger als eine Stunde zu Hause ließe
+        stay = None if prev is None else (
+            leg["start"] - prev["end"]
+            - timedelta(minutes=prev["min_rueck"] + leg["min_rueck"] + p.trip_buffer_min)
+        )
+        if prev is not None and stay < timedelta(minutes=p.trip_home_stay_min) and leg["start"] >= prev["start"]:
             same = leg["address"] == prev["address"]
             hop = 0.0 if same else _hop_km(prev["coords"], leg["coords"])
             prev["km"] = round(prev["km"] - prev["km_rueck"] + hop + leg["km_rueck"], 1)
-            prev["km_rueck"] = leg["km_rueck"]
+            prev["km_rueck"], prev["min_rueck"] = leg["km_rueck"], leg["min_rueck"]
             prev["summary"] = f"{prev['summary']} + {leg['summary']}"
             prev["end"], prev["rueckkehr"] = leg["end"], max(prev["rueckkehr"], leg["rueckkehr"])
             prev["address"], prev["coords"], prev["kette"] = leg["address"], leg["coords"], True
