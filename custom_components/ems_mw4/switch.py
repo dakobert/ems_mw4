@@ -15,6 +15,7 @@ from .const import (
     DOMAIN, NAME, SWITCH_BATTERY, SWITCH_DHW, SWITCH_HEAT_BLOCK, SWITCH_HEATING, SWITCH_MASTER, SWITCH_QUIET,
     SWITCH_PROACTIVE,
     SWITCH_CURVE,
+    SWITCH_CAR_NOW,
     SWITCH_WALLBOX,
 )
 from .coordinator import EmsCoordinator
@@ -29,6 +30,7 @@ SWITCHES = (
     (SWITCH_QUIET, "Ruhefenster einmalig", "mdi:sleep"),
     (SWITCH_PROACTIVE, "Vorausschauend heizen", "mdi:crystal-ball"),
     (SWITCH_CURVE, "Heizkurve automatisch anpassen", "mdi:chart-bell-curve-cumulative"),
+    (SWITCH_CAR_NOW, "Auto jetzt voll laden", "mdi:car-electric"),
 )
 
 
@@ -64,6 +66,9 @@ class EmsSwitch(SwitchEntity, RestoreEntity):
         if self._key == SWITCH_HEAT_BLOCK:
             if self._coordinator.params.heat_block_enabled != on:
                 self._coordinator.set_param("heat_block_enabled", on)
+        elif self._key == SWITCH_CAR_NOW:
+            if self._coordinator.params.car_now != on:
+                self._coordinator.set_param("car_now", on)
         elif self._key == SWITCH_QUIET and self._coordinator.data:
             self._coordinator.config_entry.async_create_background_task(
                 self.hass, self._coordinator.async_replan(), "ems_mw4_plan_ruhefenster"

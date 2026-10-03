@@ -43,7 +43,7 @@ from .const import (  # noqa: E402
     CONF_GOE_AMP, CONF_GOE_FRC, CONF_GOE_PSM, CONF_SG_INPUT_1, CONF_SG_INPUT_2, MODBUS_BATTERY_SETPOINT,
     MODBUS_HUB, MODBUS_SLAVE, PLAN_MAX_AGE_S, SWITCH_BATTERY, SWITCH_DHW, SWITCH_MASTER, SWITCH_WALLBOX,
     BLOCK_LOG_STORE_KEY, NOTIFY_SERVICE, SWITCH_HEATING, SWITCH_HEAT_BLOCK, SWITCH_QUIET,
-    SWITCH_PROACTIVE, SWITCH_CURVE, CONF_COMFORT_TEMP, CONF_HEAT_CURVE, CONF_SUMMER_MODE, COMFORT_WRITE_GAP_S,
+    SWITCH_PROACTIVE, SWITCH_CURVE, SWITCH_CAR_NOW, CONF_COMFORT_TEMP, CONF_HEAT_CURVE, CONF_SUMMER_MODE, COMFORT_WRITE_GAP_S,
 )
 from . import thermal as th  # noqa: E402
 from . import trips as tr  # noqa: E402
@@ -110,7 +110,7 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.switches: dict[str, bool] = {
             SWITCH_MASTER: False, SWITCH_BATTERY: True, SWITCH_DHW: True, SWITCH_WALLBOX: True,
             SWITCH_HEATING: False, SWITCH_HEAT_BLOCK: False, SWITCH_QUIET: False,
-            SWITCH_PROACTIVE: False, SWITCH_CURVE: False,
+            SWITCH_PROACTIVE: False, SWITCH_CURVE: False, SWITCH_CAR_NOW: False,
         }
         self._route_store: Store[dict[str, Any]] = Store(hass, STORE_VERSION, ROUTE_STORE_KEY)
         self.routes: dict[str, dict[str, Any]] = {}
@@ -616,6 +616,7 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.intent = intent
         written: dict[str, Any] = {}
         self._reset_quiet_when_over()
+        self._reset_car_now_when_done()
         await self._async_reminder()
         if not self.switches[SWITCH_MASTER]:
             self.last_written = {}
@@ -716,6 +717,16 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.last_written = {}
 
     # ---------- Heizung: Ruhefenster, Sperrprotokoll, Wächter ----------
+
+    def _reset_car_now_when_done(self) -> None:
+        """„Auto jetzt voll laden" gilt einmal: am Ladeziel oder beim Abstecken schaltet es sich aus."""
+        if not self.switches[SWITCH_CAR_NOW]:
+            return
+        data = self.data or {}
+        soc = data.get("car_soc")
+        if data.get("car_connected") == 0.0 or (soc is not None and soc >= self.params.car_target_soc):
+            self.switches[SWITCH_CAR_NOW] = False
+            self.set_param("car_now", False)
 
     def _reset_quiet_when_over(self) -> None:
         """Ruhefenster gilt eine Nacht: nach dem Ende schaltet es sich aus."""

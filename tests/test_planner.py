@@ -427,3 +427,13 @@ def test_trip_chain_allday_multiday_overnight():
     slots = [now + timedelta(minutes=15 * i) for i in range(192)]
     visits = tr.parse_events([ev("2026-10-08T09:00:00+02:00", "2026-10-08T11:00:00+02:00", "A", a)], now)
     assert tr.with_routes(visits, routes, slots, P) == [] and tr.later_trips(visits, routes, slots, P)[0]["kwh"] == 20.0
+
+
+def test_car_now_charges_immediately():
+    from dataclasses import replace
+    prices = [40.0] * N
+    out, info = plan_car_grid(SLOTS, prices, True, 60.0, [40.0] * 900, replace(P, car_now=True))
+    kwh = sum(out) * SLOT_H
+    assert info["sofort"] and abs(kwh - 0.4 * P.car_kwh) < 0.01 and out[0] == P.car_kw
+    assert all(v == 0 for v in out[11:])  # 25,88 kWh bei 11 kW: gut 9 Slots
+    assert sum(plan_car_grid(SLOTS, prices, False, 60.0, [40.0] * 900, replace(P, car_now=True))[0]) == 0

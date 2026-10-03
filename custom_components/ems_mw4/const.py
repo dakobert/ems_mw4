@@ -108,6 +108,7 @@ class Params:
     pv_safety: float = 0.7  # Abschlag auf die PV-Prognose bei Auto-Entscheidungen
     car_after_battery_soc: float = 50.0  # PV-Überschuss: erst Speicher bis hier, dann Auto
     car_cheap_quantile: float = 0.10
+    car_now: bool = False  # einmalig: sofort mit voller Leistung bis zum Ladeziel laden
     car_kwh_per_100km: float = 20.0
     trip_buffer_min: float = 15.0
     trip_home_stay_min: float = 60.0  # Kette, wenn zwischen zwei Terminen weniger Zeit zu Hause bliebe
@@ -161,6 +162,7 @@ SWITCH_HEAT_BLOCK = "heat_block"
 SWITCH_QUIET = "quiet_once"
 SWITCH_PROACTIVE = "heat_proactive"
 SWITCH_CURVE = "heat_curve_auto"
+SWITCH_CAR_NOW = "car_now"
 CONF_COMFORT_TEMP = "number.stiebel_eltron_isg_comfort_temperature_target_hk1"
 CONF_HEAT_CURVE = "number.stiebel_eltron_isg_heating_curve_rise_hk1"
 CONF_SUMMER_MODE = "binary_sensor.stiebel_eltron_isg_is_in_summer_mode"

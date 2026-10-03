@@ -61,6 +61,15 @@ def plan_car_grid(
     info["bedarf_kwh"] = round(need, 1)
     per_slot = p.car_kw * SLOT_H
     remaining = need
+    if p.car_now:  # Knopf „Auto jetzt voll laden": ab sofort mit voller Leistung, ohne Blick auf den Preis
+        for i in range(len(slots)):
+            if remaining <= 1e-6:
+                break
+            energy = min(per_slot, remaining)
+            out[i] = energy / SLOT_H
+            remaining -= energy
+        info["sofort"] = True
+        return out, info
     # 1. Grundreserve bis zum nächsten Morgen 7 Uhr, günstigste Slots
     reserve = max(0.0, (p.car_reserve_soc - soc) / 100.0 * p.car_kwh)
     info["reserve_kwh"] = round(reserve, 1)
