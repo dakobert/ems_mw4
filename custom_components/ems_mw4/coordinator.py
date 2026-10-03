@@ -185,6 +185,12 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         for source in SOURCES:
             sample[source.key] = self.data.get(source.key)
         sample[KEY_ROOM_TEMP] = self.data.get(KEY_ROOM_TEMP)
+        i = self.plan_index()
+        if i is not None:
+            for key, name in (("grid_kw", "plan_grid_kw"), ("battery_kw", "plan_battery_kw"), ("soc", "plan_soc"),
+                              ("battery_action", "plan_action"), ("pv_kw", "plan_pv_kw"), ("dhw_kw", "plan_dhw_kw"),
+                              ("car_kw", "plan_car_kw"), ("base_kw", "plan_base_kw"), ("heat_kw", "plan_heat_kw")):
+                sample[name] = self.plan[key][i]
         self.samples.append(sample)
         if len(self.samples) > MAX_SAMPLES:
             del self.samples[: len(self.samples) - MAX_SAMPLES]

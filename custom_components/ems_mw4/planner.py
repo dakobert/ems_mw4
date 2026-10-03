@@ -183,19 +183,26 @@ def build_plan(
     net = [fixed[i] + dhw[i] + car_grid[i] for i in range(n)]
     batt = plan_battery(prices, net, soc_pct, p)
 
-    # Auto aus verbleibendem PV-Überschuss (nach Speicherplan)
+    # Auto aus PV-Überschuss. Reihenfolge: Speicher bis 50 %, dann Auto, dann Speicher voll.
     car_pv = [0.0] * n
     remaining = car_info["bedarf_kwh"] - sum(car_grid) * SLOT_H if car_connected else 0.0
+    if remaining > 0:
+        first = next((i for i in range(n) if batt["soc"][i] >= p.car_after_battery_soc), None)
+        if soc_pct >= p.car_after_battery_soc:
+            first = 0
+        if first is not None:
+            for i in range(first, n):
+                if remaining <= 0:
+                    break
+                surplus = -net[i]
+                if surplus >= p.car_min_kw and car_grid[i] == 0:
+                    power = min(surplus, p.car_kw, remaining / SLOT_H)
+                    car_pv[i] = round(power, 3)
+                    remaining -= power * SLOT_H
+            if any(car_pv):
+                net = [net[i] + car_pv[i] for i in range(n)]
+                batt = plan_battery(prices, net, soc_pct, p)
     grid = list(batt["grid_kw"])
-    for i in range(n):
-        if remaining <= 0:
-            break
-        surplus = -grid[i]
-        if surplus >= p.car_min_kw and car_grid[i] == 0:
-            power = min(surplus, p.car_kw, remaining / SLOT_H)
-            car_pv[i] = round(power, 3)
-            grid[i] = round(grid[i] + power, 3)
-            remaining -= power * SLOT_H
 
     actions = [battery_action(batt["battery_kw"][i], net[i], batt["soc"][i], p.battery_min_soc) for i in range(n)]
     cost_by_day: dict[str, float] = {}

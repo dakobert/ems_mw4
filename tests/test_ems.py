@@ -109,6 +109,7 @@ async def test_sample_store_and_reload(hass: HomeAssistant, hass_storage) -> Non
     c = entry.runtime_data
     c.async_take_sample(dt_util.utcnow())
     assert len(c.samples) == 1 and c.samples[0]["pv_power"] == 2.0
+    assert "plan_grid_kw" not in c.samples[0]  # ohne Plan keine Planwerte
     assert c.data["samples"] == 1
     assert await hass.config_entries.async_unload(entry.entry_id)
     await hass.async_block_till_done()

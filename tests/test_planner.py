@@ -156,3 +156,19 @@ def test_battery_charges_pv_early_on_tie():
     plan = plan_battery(prices, net, 30.0, P)
     first_surplus = next(i for i, s in enumerate(SLOTS) if s.hour == 10)
     assert plan["battery_kw"][first_surplus] < -2.0  # lädt sofort, nicht erst am Nachmittag
+
+
+def test_car_pv_only_after_battery_half_full():
+    prices = [40.0] * N  # flach: kein Netzladen des Autos
+    pv = [6.0 if 9 <= s.hour < 16 else 0.0 for s in SLOTS]
+    plan = build_plan(SLOTS, prices, [False] * N, pv, [0.4] * N, [0.0] * N, 10.0, 55.0, True, 60.0, prices, P)
+    first_car = next(i for i, v in enumerate(plan["car_kw"]) if v > 0)
+    assert plan["soc"][first_car - 1] >= P.car_after_battery_soc - 1.0  # Speicher zuerst bis 50 %
+    assert plan["battery_kw"][36] < -1.0  # 9 Uhr: Speicher lädt, Auto noch nicht
+    assert plan["car_kw"][36] == 0
+    for i in range(N):
+        if plan["car_kw"][i] > 0:
+            assert plan["grid_kw"][i] <= 0.1  # Auto zieht keinen Netzstrom
+    # Speicher schon über 50 %: Auto bekommt den Überschuss sofort
+    plan = build_plan(SLOTS, prices, [False] * N, pv, [0.4] * N, [0.0] * N, 70.0, 55.0, True, 60.0, prices, P)
+    assert plan["car_kw"][36] > 0
