@@ -259,8 +259,14 @@ def _days(period: str) -> list[str]:
     return [(first + timedelta(days=n)).isoformat() for n in range((today - first).days + 1)]
 
 
+def _fee(coordinator: EmsCoordinator, days: list[str]) -> float:
+    """Grundgebühr für die Tage ab Beginn der Zählung."""
+    first = min(coordinator.costs) if coordinator.costs else dt_util.now().date().isoformat()
+    return round(sum(1 for d in days if d >= first) * coordinator.params.fixed_fee_eur_day, 2)
+
+
 class EmsCostSensor(EmsPlanBase):
-    """Tatsächliche Kosten des Netzbezugs (Tibber-Endpreis), ohne Grundgebühr."""
+    """Tatsächliche Stromkosten: Netzbezug zum Tibber-Endpreis plus Grundgebühr je Tag."""
 
     _attr_native_unit_of_measurement = "EUR"
     _attr_device_class = "monetary"
@@ -273,14 +279,16 @@ class EmsCostSensor(EmsPlanBase):
 
     @property
     def native_value(self) -> float:
-        return self.coordinator.cost_sum(_days(self._period))
+        days = _days(self._period)
+        return round(self.coordinator.cost_sum(days) + _fee(self.coordinator, days), 2)
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         days = _days(self._period)
         return {
             "bezug_kwh": self.coordinator.cost_sum(days, "kwh"),
-            "grundgebuehr_eur": round(len(days) * self.coordinator.params.fixed_fee_eur_day, 2),
+            "davon_bezug_eur": round(self.coordinator.cost_sum(days), 2),
+            "davon_grundgebuehr_eur": _fee(self.coordinator, days),
         }
 
 
@@ -308,7 +316,7 @@ class EmsCostForecastSensor(EmsPlanBase):
             if plan["slots"][n].date() == day
         )
         done = self.coordinator.cost_sum([day.isoformat()]) if self._offset == 0 else 0.0
-        return round(done + rest, 2)
+        return round(done + rest + self.coordinator.params.fixed_fee_eur_day, 2)
 
 
 class EmsImportSensor(EmsPlanBase):
