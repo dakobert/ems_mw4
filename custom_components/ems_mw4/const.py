@@ -105,6 +105,7 @@ class Params:
     car_min_kw: float = 1.4
     car_target_soc: float = 100.0
     car_reserve_soc: float = 20.0
+    pv_safety: float = 0.7  # Abschlag auf die PV-Prognose bei Auto-Entscheidungen
     car_after_battery_soc: float = 50.0  # PV-Überschuss: erst Speicher bis hier, dann Auto
     car_cheap_quantile: float = 0.10
     car_cheap_below_mean_ct: float = 6.0

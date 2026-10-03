@@ -172,3 +172,21 @@ def test_car_pv_only_after_battery_half_full():
     # Speicher schon über 50 %: Auto bekommt den Überschuss sofort
     plan = build_plan(SLOTS, prices, [False] * N, pv, [0.4] * N, [0.0] * N, 70.0, 55.0, True, 60.0, prices, P)
     assert plan["car_kw"][36] > 0
+
+
+def test_car_no_grid_charging_when_pv_covers():
+    prices = [40.0] * N
+    for i in range(52, 60):
+        prices[i] = 20.0  # sehr günstiges Fenster
+    hist = [40.0] * 900 + [20.0] * 100
+    pv = [6.0 if 9 <= s.hour < 16 else 0.0 for s in SLOTS]
+    # viel PV: kein Netzladen trotz günstigem Fenster
+    plan = build_plan(SLOTS, prices, [False] * N, pv, [0.4] * N, [0.0] * N, 60.0, 55.0, True, 80.0, hist, P)
+    assert plan["car"]["pv_deckt_bedarf"] is True and sum(plan["car_grid_kw"]) == 0
+    assert sum(plan["car_kw"]) > 0
+    # keine PV: Netzladen im günstigen Fenster
+    plan = build_plan(SLOTS, prices, [False] * N, [0.0] * N, [0.4] * N, [0.0] * N, 60.0, 55.0, True, 80.0, hist, P)
+    assert plan["car"]["pv_deckt_bedarf"] is False and sum(plan["car_grid_kw"]) > 0
+    # Grundreserve gilt immer, auch bei viel PV
+    plan = build_plan(SLOTS, prices, [False] * N, pv, [0.4] * N, [0.0] * N, 60.0, 55.0, True, 10.0, hist, P)
+    assert sum(plan["car_grid_kw"]) * 0.25 >= 6.4

@@ -50,7 +50,7 @@ def plan_dhw(slots: list[datetime], prices: list[float], net_kw: list[float], dh
 
 def plan_car_grid(
     slots: list[datetime], prices: list[float], connected: bool, soc: float | None,
-    price_history: list[float], p: Params,
+    price_history: list[float], p: Params, pv_surplus_kwh: float = 0.0,
 ) -> tuple[list[float], dict[str, Any]]:
     """Netzladen des Autos ohne Fahrt: Grundreserve und sehr günstige Preise. kW je Slot."""
     out = [0.0] * len(slots)
@@ -80,7 +80,10 @@ def plan_car_grid(
     mean = sum(history) / len(history)
     threshold = min(q, mean - p.car_cheap_below_mean_ct) if q is not None else None
     info["schwelle_ct"] = None if threshold is None else round(threshold, 2)
-    if threshold is not None and remaining > 0:
+    # Deckt der erwartete PV-Überschuss den Bedarf, wird nicht aus dem Netz geladen
+    info["pv_ueberschuss_kwh"] = round(pv_surplus_kwh, 1)
+    info["pv_deckt_bedarf"] = pv_surplus_kwh >= remaining > 0
+    if threshold is not None and remaining > 0 and not info["pv_deckt_bedarf"]:
         for i in sorted(range(len(slots)), key=lambda i: prices[i]):
             if remaining <= 0 or prices[i] > threshold:
                 break
@@ -179,7 +182,11 @@ def build_plan(
     n = len(slots)
     fixed = [base_kw[i] + heat_kw[i] - pv_kw[i] for i in range(n)]
     dhw = plan_dhw(slots, prices, fixed, dhw_temp, p)
-    car_grid, car_info = plan_car_grid(slots, prices, car_connected, car_soc, price_history, p)
+    # Für das Auto nutzbarer PV-Überschuss: vorsichtig gerechnet, nach Auffüllen des Speichers
+    raw_surplus = sum(max(0.0, -(fixed[i] + dhw[i])) for i in range(n)) * SLOT_H
+    battery_fill = max(0.0, (100.0 - soc_pct) / 100.0 * p.battery_kwh) / p.battery_eff_charge
+    pv_for_car = max(0.0, raw_surplus * p.pv_safety - battery_fill)
+    car_grid, car_info = plan_car_grid(slots, prices, car_connected, car_soc, price_history, p, pv_for_car)
     net = [fixed[i] + dhw[i] + car_grid[i] for i in range(n)]
     batt = plan_battery(prices, net, soc_pct, p)
 
