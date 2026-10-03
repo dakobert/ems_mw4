@@ -395,7 +395,7 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if events is None:
             source = "nur Ortsname"
             response = await self.hass.services.async_call(
-                "calendar", "get_events", {"entity_id": CONF_TRIP_CALENDAR, "duration": {"hours": 48}},
+                "calendar", "get_events", {"entity_id": CONF_TRIP_CALENDAR, "duration": {"hours": 72}},
                 blocking=True, return_response=True,
             )
             events = (response or {}).get(CONF_TRIP_CALENDAR, {}).get("events", [])
@@ -440,7 +440,7 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     name = str(config.get("name") if isinstance(config, dict) else "").strip()
                     if not wanted or name != wanted:
                         continue
-                    return tr.events_from_objects(await cal.async_get_events(now, now + timedelta(hours=48)))
+                    return tr.events_from_objects(await cal.async_get_events(now, now + timedelta(hours=72)))
         except Exception:  # noqa: BLE001 - fremde Integration: bei jeder Abweichung auf den Standardweg zurückfallen
             _LOGGER.warning("Kalender direkt nicht lesbar, nutze den Standardweg", exc_info=True)
         return None
