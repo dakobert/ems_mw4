@@ -1,0 +1,13 @@
+{
+  "domain": "ems_mw4",
+  "name": "EMS MW4",
+  "codeowners": ["@dakobert"],
+  "config_flow": false,
+  "dependencies": [],
+  "documentation": "https://github.com/dakobert/ems_mw4",
+  "integration_type": "service",
+  "iot_class": "calculated",
+  "issue_tracker": "https://github.com/dakobert/ems_mw4/issues",
+  "requirements": [],
+  "version": "0.0.1"
+}
