@@ -194,3 +194,15 @@ def curve_gain(slope: float | None, default: float) -> float:
         return default
     k = 1.33 * slope
     return round(k / (1.0 + k), 3)
+
+
+def last_dhw_hot(samples: list[dict[str, Any]], threshold: float) -> datetime | None:
+    """Zeitpunkt der letzten Messung, bei der der Warmwasserspeicher die Schwelle erreicht hatte."""
+    for s in reversed(samples):
+        value = s.get("dhw_temp")
+        if value is not None and value >= threshold:
+            try:
+                return datetime.fromisoformat(s["t"])
+            except (KeyError, ValueError):
+                continue
+    return None

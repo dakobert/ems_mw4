@@ -36,7 +36,7 @@ def plan_dhw(slots: list[datetime], prices: list[float], net_kw: list[float], dh
     for i, slot in enumerate(slots):
         days.setdefault(slot.date(), []).append(i)
     for n, (_, idx) in enumerate(sorted(days.items())):
-        if n == 0 and dhw_temp is not None and dhw_temp >= p.dhw_skip_above_c:
+        if n == 0 and not p.dhw_force and dhw_temp is not None and dhw_temp >= p.dhw_skip_above_c:
             continue  # heute schon warm genug
         if len(idx) < length:
             continue

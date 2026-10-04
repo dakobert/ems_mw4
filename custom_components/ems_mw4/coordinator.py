@@ -131,6 +131,8 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.car_consumption: float = self.params.car_kwh_per_100km
         self.car_consumption_km: float = 0.0
         self._reminded: set[str] = set()
+        self.dhw_hot: dict[str, Any] = {"letzte": None, "tage_her": None, "faellig": False}
+        self._dhw_warned: Any = None
         self.house_model: dict[str, Any] = {"fenster": 0, "gueltig": False}
         self.proactive: dict[str, Any] = {"shift_k": 0.0, "grund": "noch nicht gerechnet"}
         self._comfort_written_at: datetime | None = None
@@ -408,7 +410,7 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             trips, self.trip_status = [], "Fehler beim Lesen"
         plan = await self.hass.async_add_executor_job(
             build_plan, slots, prices, estimated, pv, base, heat, soc, self.data.get("dhw_temp"),
-            self.data.get("car_connected") == 1.0, self.data.get("car_soc"), history, self.params,
+            self.data.get("car_connected") == 1.0, self.data.get("car_soc"), history, await self._dhw_params(now),
             temps, self.data.get(KEY_ROOM_TEMP), self.quiet_slots(slots), trips,
         )
         plan["temp_c"] = temps
@@ -594,6 +596,37 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self._snooze_until = dt_util.now() + timedelta(hours=1)
         elif action == ACTION_SKIP:
             self._muted_day = dt_util.now().date()
+
+    # ---------- Warmwasser: wöchentliche Hochladung ----------
+
+    async def _dhw_params(self, now: datetime) -> Params:
+        """Liegt die letzte Ladung über 55 °C zu lange zurück, darf die nächste Tagesladung nicht ausfallen."""
+        from dataclasses import replace
+
+        p = self.params
+        hot = th.last_dhw_hot(self.samples, p.dhw_hot_c)
+        temp = (self.data or {}).get("dhw_temp")
+        if temp is not None and temp >= p.dhw_hot_c:
+            hot = now
+        since = hot
+        if since is None and self.samples:
+            try:
+                since = datetime.fromisoformat(self.samples[0]["t"])  # Beginn der Messreihe
+            except (KeyError, ValueError):
+                since = None
+        age = None if since is None else (now - since).total_seconds() / 86400.0
+        self.dhw_hot = {
+            "letzte": hot, "tage_her": None if age is None else round(age, 1),
+            "faellig": hot is None or (age is not None and age >= p.dhw_hot_force_days),
+        }
+        if age is not None and age > p.dhw_hot_warn_days and self._dhw_warned != now.date():
+            self._dhw_warned = now.date()
+            if self.hass.services.has_service("notify", NOTIFY_SERVICE):
+                await self.hass.services.async_call("notify", NOTIFY_SERVICE, {
+                    "title": "EMS MW4: Warmwasser",
+                    "message": f"Seit {age:.0f} Tagen keine Ladung über {p.dhw_hot_c:.0f} °C. Bitte prüfen.",
+                })
+        return replace(p, dhw_force=self.dhw_hot["faellig"])
 
     # ---------- Vorausschauend heizen ----------
 

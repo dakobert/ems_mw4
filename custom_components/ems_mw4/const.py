@@ -101,6 +101,10 @@ class Params:
     dhw_kwh: float = 1.5
     dhw_kw: float = 2.0
     dhw_skip_above_c: float = 48.0
+    dhw_hot_c: float = 55.0  # ab hier zählt eine Ladung als Hochladung (Legionellenschutz)
+    dhw_hot_force_days: float = 6.0  # so lange ohne Hochladung: nächste Tagesladung wird nicht ausgelassen
+    dhw_hot_warn_days: float = 8.0  # so lange ohne Hochladung: Push
+    dhw_force: bool = False
     car_kwh: float = 64.7
     car_kw: float = 11.0
     car_min_kw: float = 1.4

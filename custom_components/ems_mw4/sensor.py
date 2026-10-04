@@ -138,6 +138,7 @@ def plan_entities(coordinator: EmsCoordinator, entry: EmsConfigEntry) -> list[Se
         EmsHeatPlanSensor(coordinator, entry),
         EmsProactiveSensor(coordinator, entry),
         EmsHouseModelSensor(coordinator, entry),
+        EmsDhwHotSensor(coordinator, entry),
         EmsTripDestinationSensor(coordinator, entry),
         EmsTripSensor(coordinator, entry),
         EmsAccuracySensor(coordinator, entry),
@@ -535,3 +536,25 @@ class EmsHouseModelSensor(EmsPlanBase):
             rest = model.get("rest_k_je_h") or 0.0
             table = {f"{t} °C außen": round((-(21 - t) * loss + rest) * 24, 2) for t in (10, 5, 0, -5)}
         return {**model, "aenderung_k_je_tag_ohne_heizung": table}
+
+
+class EmsDhwHotSensor(EmsPlanBase):
+    """Letzte Warmwasserladung über 55 °C (ersetzt das feste Legionellenprogramm der Stiebel)."""
+
+    _attr_device_class = SensorDeviceClass.TIMESTAMP
+    _attr_icon = "mdi:water-thermometer"
+
+    def __init__(self, coordinator: EmsCoordinator, entry: EmsConfigEntry) -> None:
+        super().__init__(coordinator, entry, "dhw_hot", "Warmwasser letzte Hochladung")
+
+    @property
+    def native_value(self) -> datetime | None:
+        return self.coordinator.dhw_hot.get("letzte")
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        info = self.coordinator.dhw_hot
+        return {
+            "tage_her": info.get("tage_her"), "naechste_ladung_pflicht": info.get("faellig"),
+            "schwelle_c": self.coordinator.params.dhw_hot_c,
+        }

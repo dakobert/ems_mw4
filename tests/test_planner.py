@@ -536,3 +536,17 @@ def test_curve_gain_matches_measured_curve():
     from custom_components.ems_mw4 import thermal as th
     assert th.curve_gain(0.5, 0.2) == 0.399 and th.curve_gain(0.35, 0.2) == 0.318
     assert th.curve_gain(None, 0.2) == 0.2 and th.curve_gain(0.0, 0.2) == 0.2
+
+
+def test_dhw_weekly_hot_charge():
+    from dataclasses import replace
+    from custom_components.ems_mw4 import thermal as th
+    prices = [30.0] * N
+    # Speicher warm genug: heute keine Ladung. Ist die Hochladung fällig, wird trotzdem geladen
+    normal = plan_dhw(SLOTS, prices, [0.5] * N, 50.0, P)
+    forced = plan_dhw(SLOTS, prices, [0.5] * N, 50.0, replace(P, dhw_force=True))
+    assert sum(forced) > sum(normal)
+    samples = [{"t": "2026-10-01T10:00:00+00:00", "dhw_temp": 57.0}, {"t": "2026-10-02T10:00:00+00:00", "dhw_temp": 52.0},
+               {"t": "2026-10-03T10:00:00+00:00", "dhw_temp": None}]
+    assert th.last_dhw_hot(samples, 55.0).isoformat() == "2026-10-01T10:00:00+00:00"
+    assert th.last_dhw_hot(samples, 60.0) is None
