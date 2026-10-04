@@ -437,3 +437,52 @@ def test_car_now_charges_immediately():
     assert info["sofort"] and abs(kwh - 0.4 * P.car_kwh) < 0.01 and out[0] == P.car_kw
     assert all(v == 0 for v in out[11:])  # 25,88 kWh bei 11 kW: gut 9 Slots
     assert sum(plan_car_grid(SLOTS, prices, False, 60.0, [40.0] * 900, replace(P, car_now=True))[0]) == 0
+
+
+def test_car_refills_trip_consumption_after_return():
+    from custom_components.ems_mw4.planner import car_room
+    # Fahrt von 11 bis 13 Uhr mit 10 kWh, Auto bei 90 %: bis zum Ladeziel fehlen 6,47 kWh, nach der Rückkehr 10 kWh mehr
+    trip = {"summary": "Termin", "address": "A", "km": 50.0, "fahrzeit_min": 30, "kwh": 10.0, "kette": False,
+            "abfahrt": SLOTS[44], "rueckkehr": SLOTS[52], "dep_index": 44, "back_index": 53}
+    flat = [40.0] * N
+    pv = [6.0 if 9 <= s.hour < 16 else 0.0 for s in SLOTS]
+    plan = build_plan(SLOTS, flat, [False] * N, pv, [0.4] * N, [0.0] * N, 70.0, 55.0, True, 90.0, flat, P, trips=[trip])
+    car = plan["car_kw"]
+    assert plan["car"]["bedarf_kwh"] == 16.5 and plan["car"]["fahrten_kwh"] == 10.0
+    assert abs(sum(car[:44]) * SLOT_H - 6.47) < 0.01  # vor der Abfahrt nur bis zum Ladeziel
+    assert all(v == 0 for v in car[44:53])  # unterwegs kein Laden
+    assert abs(sum(car[53:]) * SLOT_H - 10.0) < 0.01  # danach der Verbrauch der Fahrt
+    # ohne Fahrt bleibt es beim Bedarf bis zum Ladeziel
+    plan = build_plan(SLOTS, flat, [False] * N, pv, [0.4] * N, [0.0] * N, 70.0, 55.0, True, 90.0, flat, P)
+    assert plan["car"]["bedarf_kwh"] == 6.5 and abs(sum(plan["car_kw"]) * SLOT_H - 6.47) < 0.01
+    # sehr günstige Fenster vor und nach der Fahrt: vorher höchstens der freie Platz, der Rest danach
+    prices = [40.0] * N
+    for i in list(range(8, 12)) + list(range(100, 104)):
+        prices[i] = 20.0
+    hist = [40.0] * 900 + [20.0] * 60
+    away = [44 <= i < 53 for i in range(N)]
+    out, info = plan_car_grid(SLOTS, prices, True, 90.0, hist, P, 0.0, car_room(N, 90.0, [trip], P), away)
+    assert abs(sum(out[:44]) * SLOT_H - 6.47) < 0.01 and abs(sum(out[53:]) * SLOT_H - 10.0) < 0.01
+    assert all(v == 0 for i, v in enumerate(out) if prices[i] > 20.0)
+    # eine Fahrt, die erst nach dem Planfenster endet, schafft im Fenster keinen Platz
+    late = dict(trip, dep_index=180, back_index=N)
+    assert car_room(N, 90.0, [late], P)[-1] == car_room(N, 90.0, [], P)[-1]
+    # „jetzt voll laden" füllt nur bis zum Ladeziel
+    out, info = plan_car_grid(SLOTS, flat, True, 90.0, hist, replace(P, car_now=True), 0.0, car_room(N, 90.0, [trip], P), away)
+    assert abs(sum(out) * SLOT_H - 6.47) < 0.01 and info["bedarf_kwh"] == 16.5
+
+
+def test_car_pv_during_absence_does_not_count():
+    # PV nur am ersten Tag, das Auto ist dann unterwegs: der Überschuss deckt den Bedarf nicht, Netzladen im günstigen Fenster
+    trip = {"summary": "Termin", "address": "A", "km": 50.0, "fahrzeit_min": 30, "kwh": 10.0, "kette": False,
+            "abfahrt": SLOTS[32], "rueckkehr": SLOTS[65], "dep_index": 32, "back_index": 66}
+    prices = [40.0] * N
+    for i in range(100, 108):
+        prices[i] = 20.0
+    hist = [40.0] * 900 + [20.0] * 100
+    pv = [6.0 if 36 <= i < 64 else 0.0 for i in range(N)]
+    plan = build_plan(SLOTS, prices, [False] * N, pv, [0.4] * N, [0.0] * N, 60.0, 55.0, True, 80.0, hist, P, trips=[trip])
+    assert plan["car"]["pv_deckt_bedarf"] is False and sum(plan["car_grid_kw"][100:108]) > 0
+    # steht das Auto zu Hause, reicht derselbe Überschuss
+    plan = build_plan(SLOTS, prices, [False] * N, pv, [0.4] * N, [0.0] * N, 60.0, 55.0, True, 80.0, hist, P)
+    assert plan["car"]["pv_deckt_bedarf"] is True and sum(plan["car_grid_kw"]) == 0

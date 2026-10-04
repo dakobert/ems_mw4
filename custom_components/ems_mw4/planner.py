@@ -48,20 +48,54 @@ def plan_dhw(slots: list[datetime], prices: list[float], net_kw: list[float], dh
     return out
 
 
+def car_room(n: int, soc: float, trips: list[dict[str, Any]], p: Params) -> list[float]:
+    """Platz im Auto-Akku bis zum Ladeziel in kWh: bis einschließlich Slot i darf insgesamt so viel geladen werden.
+
+    Eine Fahrt verbraucht Strom, ab ihrer Rückkehr ist um diesen Verbrauch mehr Platz.
+    Fahrten, die erst nach dem Planfenster enden, zählen nicht.
+    """
+    room = [(p.car_target_soc - soc) / 100.0 * p.car_kwh] * n
+    for trip in trips:
+        for i in range(trip["back_index"], n):
+            room[i] += trip["kwh"]
+    return room
+
+
+def _car_free(room: list[float], charged_kw: list[float], i: int) -> float:
+    """Was im Slot i noch geladen werden kann, ohne das Ladeziel jetzt oder später zu überschreiten (kWh)."""
+    total = sum(charged_kw[:i]) * SLOT_H
+    free = INF
+    for j in range(i, len(room)):
+        total += charged_kw[j] * SLOT_H
+        free = min(free, room[j] - total)
+    return max(0.0, free)
+
+
 def plan_car_grid(
     slots: list[datetime], prices: list[float], connected: bool, soc: float | None,
     price_history: list[float], p: Params, pv_surplus_kwh: float = 0.0,
+    room: list[float] | None = None, away: list[bool] | None = None,
 ) -> tuple[list[float], dict[str, Any]]:
-    """Netzladen des Autos ohne Fahrt: Grundreserve und sehr günstige Preise. kW je Slot."""
+    """Netzladen des Autos ohne Fahrt: Grundreserve und sehr günstige Preise. kW je Slot.
+
+    `room` (siehe car_room) und `away` berücksichtigen Fahrten: Der Bedarf enthält ihren Verbrauch,
+    geladen wird er erst nach der Rückkehr.
+    """
     out = [0.0] * len(slots)
-    info: dict[str, Any] = {"schwelle_ct": None, "bedarf_kwh": 0.0, "reserve_kwh": 0.0}
+    info: dict[str, Any] = {"schwelle_ct": None, "bedarf_kwh": 0.0, "reserve_kwh": 0.0, "fahrten_kwh": 0.0}
     if not connected or soc is None:
         return out, info
-    need = max(0.0, (p.car_target_soc - soc) / 100.0 * p.car_kwh)
+    if room is None:
+        room = car_room(len(slots), soc, [], p)
+    if away is None:
+        away = [False] * len(slots)
+    need = max(0.0, room[-1])
     info["bedarf_kwh"] = round(need, 1)
+    info["fahrten_kwh"] = round(room[-1] - room[0], 1)
     per_slot = p.car_kw * SLOT_H
     remaining = need
     if p.car_now:  # Knopf „Auto jetzt voll laden": ab sofort mit voller Leistung, ohne Blick auf den Preis
+        remaining = max(0.0, room[0])  # der Verbrauch späterer Fahrten wird nach der Rückkehr geladen
         for i in range(len(slots)):
             if remaining <= 1e-6:
                 break
@@ -96,9 +130,11 @@ def plan_car_grid(
         for i in sorted(range(len(slots)), key=lambda i: prices[i]):
             if remaining <= 0 or prices[i] > threshold:
                 break
-            if out[i] > 0:
+            if out[i] > 0 or away[i]:
                 continue
-            energy = min(per_slot, remaining)
+            energy = min(per_slot, remaining, _car_free(room, out, i))
+            if energy <= 1e-6:
+                continue
             out[i] = energy / SLOT_H
             remaining -= energy
     return out, info
@@ -312,13 +348,18 @@ def build_plan(
     )
     fixed = [base_kw[i] + heat_kw[i] - pv_kw[i] for i in range(n)]
     dhw = plan_dhw(slots, prices, fixed, dhw_temp, p)
-    # Für das Auto nutzbarer PV-Überschuss: vorsichtig gerechnet, nach Auffüllen des Speichers
-    raw_surplus = sum(max(0.0, -(fixed[i] + dhw[i])) for i in range(n)) * SLOT_H
-    battery_fill = max(0.0, (100.0 - soc_pct) / 100.0 * p.battery_kwh) / p.battery_eff_charge
-    pv_for_car = max(0.0, raw_surplus * p.pv_safety - battery_fill)
-    car_grid, car_info = plan_car_grid(slots, prices, car_connected, car_soc, price_history, p, pv_for_car)
     # Fahrten aus dem Kalender gehen vor; unterwegs wird nicht geladen
     car_trip, away, trip_info = plan_car_trips(prices, car_connected, car_soc, trips or [], p)
+    # Für das Auto nutzbarer PV-Überschuss: vorsichtig gerechnet, nach Auffüllen des Speichers,
+    # und höchstens der Überschuss, der anfällt, während das Auto zu Hause steht
+    pv_surplus = [max(0.0, -(fixed[i] + dhw[i])) for i in range(n)]
+    battery_fill = max(0.0, (100.0 - soc_pct) / 100.0 * p.battery_kwh) / p.battery_eff_charge
+    pv_for_car = max(0.0, sum(pv_surplus) * SLOT_H * p.pv_safety - battery_fill)
+    pv_for_car = min(pv_for_car, sum(v for v, gone in zip(pv_surplus, away) if not gone) * SLOT_H * p.pv_safety)
+    room = None if car_soc is None else car_room(n, car_soc, trips or [], p)
+    car_grid, car_info = plan_car_grid(
+        slots, prices, car_connected, car_soc, price_history, p, pv_for_car, room, away
+    )
     car_grid = [0.0 if away[i] else max(car_grid[i], car_trip[i]) for i in range(n)]
     net = [fixed[i] + dhw[i] + car_grid[i] for i in range(n)]
     batt = plan_battery(prices, net, soc_pct, p)
@@ -331,13 +372,17 @@ def build_plan(
         if soc_pct >= p.car_after_battery_soc:
             first = 0
         if first is not None:
+            charged = list(car_grid)
             for i in range(first, n):
                 if remaining <= 0:
                     break
                 surplus = -net[i]
                 if surplus >= p.car_min_kw and car_grid[i] == 0 and not away[i]:
-                    power = min(surplus, p.car_kw, remaining / SLOT_H)
-                    car_pv[i] = round(power, 3)
+                    # vor einer Fahrt nur bis zum Ladeziel, ihr Verbrauch folgt nach der Rückkehr
+                    power = min(surplus, p.car_kw, remaining / SLOT_H, _car_free(room, charged, i) / SLOT_H)
+                    if power < 0.001:
+                        continue
+                    car_pv[i] = charged[i] = round(power, 3)
                     remaining -= power * SLOT_H
             if any(car_pv):
                 net = [net[i] + car_pv[i] for i in range(n)]
