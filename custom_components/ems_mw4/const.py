@@ -73,6 +73,7 @@ SLOT_H = SLOT_MIN / 60
 HORIZON_SLOTS = 48 * 4
 PLAN_MINUTES = (0, 15, 30, 45)
 COST_STORE_KEY = f"{DOMAIN}.kosten"
+ACCURACY_STORE_KEY = f"{DOMAIN}.plangenauigkeit"
 
 CONF_WEATHER = "weather_entity"
 DEFAULT_WEATHER = "weather.menslage"

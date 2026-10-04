@@ -139,6 +139,7 @@ def plan_entities(coordinator: EmsCoordinator, entry: EmsConfigEntry) -> list[Se
         EmsProactiveSensor(coordinator, entry),
         EmsTripDestinationSensor(coordinator, entry),
         EmsTripSensor(coordinator, entry),
+        EmsAccuracySensor(coordinator, entry),
     ]
 
 
@@ -484,3 +485,25 @@ class EmsTripSensor(EmsPlanBase):
             "verbrauch_kwh_100km": self.coordinator.car_consumption,
             "verbrauch_basis_km": self.coordinator.car_consumption_km,
         }
+
+
+class EmsAccuracySensor(EmsPlanBase):
+    """Plangenauigkeit: wie gut PV- und Grundlastprognose mit der Messung übereinstimmen (7 Tage)."""
+
+    _attr_native_unit_of_measurement = "%"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_suggested_display_precision = 0
+    _attr_icon = "mdi:bullseye-arrow"
+
+    def __init__(self, coordinator: EmsCoordinator, entry: EmsConfigEntry) -> None:
+        super().__init__(coordinator, entry, "plangenauigkeit", "Plangenauigkeit")
+
+    @property
+    def native_value(self) -> int | None:
+        return self.coordinator.accuracy_result()["wert"]
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        result = self.coordinator.accuracy_result()
+        result.pop("wert")
+        return result

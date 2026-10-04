@@ -47,6 +47,8 @@ from .const import (  # noqa: E402
 )
 from . import thermal as th  # noqa: E402
 from . import trips as tr  # noqa: E402
+from . import accuracy as acc  # noqa: E402
+from .const import ACCURACY_STORE_KEY, SLOT_H  # noqa: E402
 from .const import (  # noqa: E402
     CONF_ROUTE_DISTANCE, CONF_ROUTE_DURATION, CONF_TRIP_CALENDAR, ROUTE_MAX_AGE_DAYS, ROUTE_STORE_KEY,
 )
@@ -141,6 +143,9 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.intent: dict[str, Any] = {"grund": "noch nicht gerechnet"}
         self.last_written: dict[str, Any] = {}
         self._psm_changes: list[datetime] = []
+        # Plangenauigkeit: nur Auswertung
+        self._accuracy_store: Store[dict[str, Any]] = Store(hass, STORE_VERSION, ACCURACY_STORE_KEY)
+        self.accuracy: dict[str, Any] = acc.new_state()
 
     def entity_for(self, key: str) -> str:
         """Quell-Entität für einen Schlüssel: Einstellung oder Vorgabe."""
@@ -167,6 +172,13 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         costs = await self._cost_store.async_load()
         if costs and isinstance(costs.get("days"), dict):
             self.costs = costs["days"]
+        self.accuracy = acc.clean_state(await self._accuracy_store.async_load())
+
+        async def _save_accuracy(_event: Any) -> None:
+            await self._accuracy_store.async_save(self.accuracy)
+
+        # beim Herunterfahren den Stand der laufenden Stunde sichern
+        self.config_entry.async_on_unload(self.hass.bus.async_listen("homeassistant_stop", _save_accuracy))
 
     def _debounced(self, key: str, raw: float | None) -> float | None:
         """Wert gilt erst, wenn er in zwei Abfragen nacheinander gleich ist."""
@@ -216,6 +228,7 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             missing.append(KEY_ROOM_TEMP)
         self.missing = missing
         self._track_cost(now, data.get("grid_power"), data.get("price"))
+        self._track_accuracy(now, data)
         data[KEY_SOURCES_OK] = len(SOURCES) + 1 - len(missing)
         data[KEY_SAMPLES] = len(self.samples)
         if self.plan is None and not self._replanning and data.get("battery_soc") is not None and self.data:
@@ -258,6 +271,7 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         await self._store.async_save(self._data_to_save())
         await self._cost_store.async_save(self._costs_to_save())
         await self._block_store.async_save({"log": self.block_log})
+        await self._accuracy_store.async_save(self.accuracy)
 
     # ---------- Kosten ----------
 
@@ -281,6 +295,40 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             for key in sorted(self.costs)[: len(self.costs) - 800]:
                 del self.costs[key]
         self._cost_store.async_delay_save(self._costs_to_save, 300)
+
+    # ---------- Plangenauigkeit (nur Auswertung) ----------
+
+    def _track_accuracy(self, now: datetime, data: dict[str, Any]) -> None:
+        """Istwerte für PV und Grundlast aufsummieren, nach jeder vollen Stunde abschließen."""
+        try:
+            closed = acc.track(
+                self.accuracy, now, data.get("pv_power"), data.get("home_power"),
+                data.get("hp_power"), data.get("wallbox_power"),
+            )
+            if closed:
+                acc.prune(self.accuracy, now)
+            if closed or now.minute % 5 == 0:
+                self._accuracy_store.async_delay_save(lambda: self.accuracy, 5)
+        except Exception:  # noqa: BLE001 - die Auswertung darf den Datensammler nie stören
+            _LOGGER.exception("Plangenauigkeit: Istwerte konnten nicht verbucht werden")
+
+    def _record_forecast(self, now: datetime, plan: dict[str, Any]) -> None:
+        """Prognose des neuen Plans für die Auswertung festhalten."""
+        try:
+            acc.record_forecast(self.accuracy, now, plan["slots"], plan["pv_kw"], plan["base_kw"], SLOT_H)
+            acc.record_cost_forecast(self.accuracy, now, plan["cost_eur"])
+            self._accuracy_store.async_delay_save(lambda: self.accuracy, 5)
+        except Exception:  # noqa: BLE001 - die Auswertung darf den Plan nie verhindern
+            _LOGGER.exception("Plangenauigkeit: Prognose konnte nicht festgehalten werden")
+
+    def accuracy_result(self) -> dict[str, Any]:
+        """Kennzahlen der Plangenauigkeit samt Kostenvergleich für gestern."""
+        result = acc.evaluate(self.accuracy, dt_util.utcnow())
+        yesterday = (dt_util.now().date() - timedelta(days=1)).isoformat()
+        actual = self.costs.get(yesterday, {}).get("eur")
+        result["kosten_prognose_gestern"] = self.accuracy["kosten_fc"].get(yesterday)
+        result["kosten_ist_gestern"] = None if actual is None else round(actual, 2)
+        return result
 
     def cost_sum(self, days: list[str], field: str = "eur") -> float:
         return round(sum(self.costs.get(d, {}).get(field, 0.0) for d in days), 2)
@@ -361,6 +409,7 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         plan["temp_c"] = temps
         self._update_proactive(temps)
         self.plan, self.plan_time = plan, now
+        self._record_forecast(now, plan)
         self.plan_status = "ok" if not any(estimated[:96]) else "ok, Preise teils geschätzt"
 
     def quiet_slots(self, slots: list[datetime]) -> tuple[int, int] | None:
