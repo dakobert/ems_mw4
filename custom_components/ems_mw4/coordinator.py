@@ -608,9 +608,13 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         # Wärmeverhalten des Hauses aus der Messreihe; ersetzt den Startwert, sobald es belastbar ist
         self.house_model = th.fit_house(self.samples)
-        p = replace(self.params, heat_outdoor_coupling=th.learned_coupling(
-            self.house_model, self.params.heat_lookahead_h, self.params.heat_outdoor_coupling
-        ))
+        p = replace(
+            self.params,
+            heat_outdoor_coupling=th.learned_coupling(
+                self.house_model, self.params.heat_lookahead_h, self.params.heat_outdoor_coupling
+            ),
+            heat_days_gain=th.curve_gain(self._number(CONF_HEAT_CURVE), self.params.heat_days_gain),
+        )
         adv = th.advise(
             (self.data or {}).get(KEY_ROOM_TEMP), th.room_slope(self.samples, now, 12),
             th.outdoor_past_mean(self.samples, now, 24), temps[: int(p.heat_lookahead_h * 4)], p, cold_ahead,

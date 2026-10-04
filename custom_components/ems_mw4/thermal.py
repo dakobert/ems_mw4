@@ -181,3 +181,16 @@ def learned_coupling(model: dict[str, Any], hours: float, default: float) -> flo
     if not model.get("gueltig"):
         return default
     return round(1.0 - math.exp(-model["auskuehlen_k_je_h_je_k"] * hours), 3)
+
+
+def curve_gain(slope: float | None, default: float) -> float:
+    """Anhebung der Komforttemperatur, die einem Grad kälterer Außentemperatur entspricht.
+
+    An der Stiebel gemessen (04.10.2026): Vorlauf-Soll = Komfort + 1,33 * Steilheit * (Komfort - Außen).
+    Ein Grad kälter draußen hebt den Vorlauf um 1,33 * Steilheit, ein Grad Komfort um 1 + 1,33 * Steilheit.
+    Das Verhältnis ist die Anhebung, mit der die Heizung heute so läuft, als wäre die Kälte schon da.
+    """
+    if slope is None or slope <= 0:
+        return default
+    k = 1.33 * slope
+    return round(k / (1.0 + k), 3)

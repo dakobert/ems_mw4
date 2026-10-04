@@ -528,3 +528,9 @@ def test_house_model_learns_loss_and_heating():
     # zu wenig Daten: Startwert bleibt
     few = th.fit_house(samples[:96])
     assert not few["gueltig"] and th.learned_coupling(few, 24, 0.15) == 0.15
+
+
+def test_curve_gain_matches_measured_curve():
+    from custom_components.ems_mw4 import thermal as th
+    assert th.curve_gain(0.5, 0.2) == 0.399 and th.curve_gain(0.35, 0.2) == 0.318
+    assert th.curve_gain(None, 0.2) == 0.2 and th.curve_gain(0.0, 0.2) == 0.2
