@@ -100,6 +100,7 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._cost_store: Store[dict[str, Any]] = Store(hass, STORE_VERSION, COST_STORE_KEY)
         self.costs: dict[str, dict[str, float]] = {}
         self._last_cost_time: datetime | None = None
+        self._cost_save_at: datetime | None = None
         self.plan: dict[str, Any] | None = None
         self.plan_time: datetime | None = None
         self.plan_status: str = "noch kein Plan"
@@ -295,7 +296,10 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if len(self.costs) > 800:
             for key in sorted(self.costs)[: len(self.costs) - 800]:
                 del self.costs[key]
-        self._cost_store.async_delay_save(self._costs_to_save, 300)
+        # nur alle 5 Minuten neu anmelden, sonst verschiebt jeder Aufruf das Schreiben immer weiter
+        if self._cost_save_at is None or (now - self._cost_save_at).total_seconds() >= 300:
+            self._cost_save_at = now
+            self._cost_store.async_delay_save(self._costs_to_save, 10)
 
     # ---------- Plangenauigkeit (nur Auswertung) ----------
 
