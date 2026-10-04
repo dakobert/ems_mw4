@@ -137,6 +137,7 @@ def plan_entities(coordinator: EmsCoordinator, entry: EmsConfigEntry) -> list[Se
         EmsExecutorSensor(coordinator, entry),
         EmsHeatPlanSensor(coordinator, entry),
         EmsProactiveSensor(coordinator, entry),
+        EmsHouseModelSensor(coordinator, entry),
         EmsTripDestinationSensor(coordinator, entry),
         EmsTripSensor(coordinator, entry),
         EmsAccuracySensor(coordinator, entry),
@@ -509,3 +510,28 @@ class EmsAccuracySensor(EmsPlanBase):
         result = self.coordinator.accuracy_result()
         result.pop("wert")
         return result
+
+
+class EmsHouseModelSensor(EmsPlanBase):
+    """Gelerntes Wärmeverhalten des Hauses: wie schnell es auskühlt und aufheizt."""
+
+    _attr_native_unit_of_measurement = "h"
+    _attr_icon = "mdi:home-thermometer-outline"
+
+    def __init__(self, coordinator: EmsCoordinator, entry: EmsConfigEntry) -> None:
+        super().__init__(coordinator, entry, "house_model", "Wärmeverhalten Haus")
+
+    @property
+    def native_value(self) -> float | None:
+        return self.coordinator.house_model.get("zeitkonstante_h")
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        model = self.coordinator.house_model
+        loss = model.get("auskuehlen_k_je_h_je_k")
+        table = None
+        if loss is not None and loss > 0:
+            # Auskühlen ohne Heizung und ohne Sonne bei 21 Grad Raumtemperatur, in K je Tag
+            rest = model.get("rest_k_je_h") or 0.0
+            table = {f"{t} °C außen": round((-(21 - t) * loss + rest) * 24, 2) for t in (10, 5, 0, -5)}
+        return {**model, "aenderung_k_je_tag_ohne_heizung": table}

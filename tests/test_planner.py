@@ -505,3 +505,26 @@ def test_proactive_raises_days_before_cold():
     # Raum schon deutlich zu warm: nicht noch anheben; Obergrenze gilt
     assert th.advise(23.5, 0.0, 13.0, [13.0] * 96, P, 6.0)["shift_k"] <= 0.0
     assert th.advise(20.0, -0.05, 15.0, [10.0] * 96, P, -5.0)["shift_k"] == P.heat_shift_max_k
+
+
+def test_house_model_learns_loss_and_heating():
+    import random
+    from custom_components.ems_mw4 import thermal as th
+    random.seed(1)
+    loss, gain, sun = 0.01, 0.05, 0.02  # Zeitkonstante 100 h
+    room, samples = 21.0, []
+    for i in range(96 * 14):
+        hour = (i // 4) % 24
+        out = 5.0 + 4.0 * (1 if 10 <= hour < 18 else -1) + (i // 96) * 0.3
+        hp = 2000.0 if (i // 24) % 3 == 0 else 0.0
+        pv = 3000.0 if 10 <= hour < 16 else 0.0
+        room += (-(room - out) * loss + hp / 1000 * gain + pv / 1000 * sun + 0.05) * 0.25
+        samples.append({"room_temp": room + random.uniform(-0.01, 0.01), "outdoor_temp": out, "hp_power": hp, "pv_power": pv})
+    model = th.fit_house(samples)
+    assert model["gueltig"] and model["fenster"] == 56
+    assert abs(model["auskuehlen_k_je_h_je_k"] - loss) < 0.002 and 80 <= model["zeitkonstante_h"] <= 125
+    assert abs(model["heizen_k_je_h_je_kw"] - gain) < 0.01 and abs(model["sonne_k_je_h_je_kw_pv"] - sun) < 0.01
+    assert 0.18 < th.learned_coupling(model, 24, 0.15) < 0.26
+    # zu wenig Daten: Startwert bleibt
+    few = th.fit_house(samples[:96])
+    assert not few["gueltig"] and th.learned_coupling(few, 24, 0.15) == 0.15

@@ -129,3 +129,55 @@ def curve_target(current: float | None, shift_history: list[float], p: Params) -
         return None
     target = round(target, 2)
     return target if abs(target - current) >= 0.01 else None
+
+
+def fit_house(samples: list[dict[str, Any]], window: int = 24) -> dict[str, Any]:
+    """Wärmeverhalten des Hauses aus der Messreihe lernen.
+
+    Je 6-Stunden-Fenster: Änderung der Raumreferenz (K/h) erklärt durch
+      - den Abstand zur Außentemperatur (Auskühlen),
+      - die Leistung der Wärmepumpe (Aufheizen),
+      - die PV-Leistung als Maß für die Sonne,
+      - einen festen Rest (Bewohner, Geräte).
+    Das Ergebnis gilt erst mit genug Fenstern und plausiblen Werten als belastbar.
+    """
+    import numpy as np
+
+    rows: list[list[float]] = []
+    change: list[float] = []
+    for start in range(0, len(samples) - window + 1, window):
+        chunk = samples[start : start + window]
+        if any(s.get("room_temp") is None or s.get("outdoor_temp") is None for s in chunk):
+            continue
+        head = sum(s["room_temp"] for s in chunk[:4]) / 4
+        tail = sum(s["room_temp"] for s in chunk[-4:]) / 4
+        hours = (window - 4) * 0.25
+        gap = sum(s["room_temp"] - s["outdoor_temp"] for s in chunk) / window
+        heat = sum((s.get("hp_power") or 0.0) for s in chunk) / window / 1000.0
+        sun = sum((s.get("pv_power") or 0.0) for s in chunk) / window / 1000.0
+        rows.append([-gap, heat, sun, 1.0])
+        change.append((tail - head) / hours)
+    out: dict[str, Any] = {"fenster": len(rows), "gueltig": False}
+    if len(rows) < 12:
+        return out
+    coef, *_ = np.linalg.lstsq(np.array(rows), np.array(change), rcond=None)
+    loss, heat_gain, sun_gain, rest = (float(v) for v in coef)
+    out.update({
+        "auskuehlen_k_je_h_je_k": round(loss, 5),
+        "heizen_k_je_h_je_kw": round(heat_gain, 4),
+        "sonne_k_je_h_je_kw_pv": round(sun_gain, 4),
+        "rest_k_je_h": round(rest, 4),
+        "zeitkonstante_h": round(1.0 / loss, 0) if loss > 0 else None,
+    })
+    # belastbar: mindestens 10 Tage und eine Zeitkonstante zwischen 20 und 400 Stunden
+    out["gueltig"] = len(rows) >= 40 and 0.0025 <= loss <= 0.05 and heat_gain >= 0
+    return out
+
+
+def learned_coupling(model: dict[str, Any], hours: float, default: float) -> float:
+    """Wie stark die Raumtemperatur in `hours` Stunden einer Änderung der Außentemperatur folgt (K je K)."""
+    import math
+
+    if not model.get("gueltig"):
+        return default
+    return round(1.0 - math.exp(-model["auskuehlen_k_je_h_je_k"] * hours), 3)

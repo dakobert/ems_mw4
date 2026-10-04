@@ -130,6 +130,7 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.car_consumption: float = self.params.car_kwh_per_100km
         self.car_consumption_km: float = 0.0
         self._reminded: set[str] = set()
+        self.house_model: dict[str, Any] = {"fenster": 0, "gueltig": False}
         self.proactive: dict[str, Any] = {"shift_k": 0.0, "grund": "noch nicht gerechnet"}
         self._comfort_written_at: datetime | None = None
         self._comfort_touched = False
@@ -599,7 +600,13 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def _update_proactive(self, temps: list[float | None], cold_ahead: float | None = None) -> None:
         """Empfehlung für Komforttemperatur und Heizkurve neu rechnen (alle 15 Minuten mit dem Plan)."""
         now = dt_util.utcnow()
-        p = self.params
+        from dataclasses import replace
+
+        # Wärmeverhalten des Hauses aus der Messreihe; ersetzt den Startwert, sobald es belastbar ist
+        self.house_model = th.fit_house(self.samples)
+        p = replace(self.params, heat_outdoor_coupling=th.learned_coupling(
+            self.house_model, self.params.heat_lookahead_h, self.params.heat_outdoor_coupling
+        ))
         adv = th.advise(
             (self.data or {}).get(KEY_ROOM_TEMP), th.room_slope(self.samples, now, 12),
             th.outdoor_past_mean(self.samples, now, 24), temps[: int(p.heat_lookahead_h * 4)], p, cold_ahead,
