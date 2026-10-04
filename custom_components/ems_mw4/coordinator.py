@@ -407,7 +407,8 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             temps, self.data.get(KEY_ROOM_TEMP), self.quiet_slots(slots), trips,
         )
         plan["temp_c"] = temps
-        self._update_proactive(temps)
+        daily = await ems_data.async_fetch_daily_means(self.hass, weather)
+        self._update_proactive(temps, th.coldest_day(daily, now.date(), self.params.heat_days_ahead))
         self.plan, self.plan_time = plan, now
         self._record_forecast(now, plan)
         self.plan_status = "ok" if not any(estimated[:96]) else "ok, Preise teils geschätzt"
@@ -595,13 +596,13 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         state = self.hass.states.get(entity_id)
         return to_number(state.state) if state is not None else None
 
-    def _update_proactive(self, temps: list[float | None]) -> None:
+    def _update_proactive(self, temps: list[float | None], cold_ahead: float | None = None) -> None:
         """Empfehlung für Komforttemperatur und Heizkurve neu rechnen (alle 15 Minuten mit dem Plan)."""
         now = dt_util.utcnow()
         p = self.params
         adv = th.advise(
             (self.data or {}).get(KEY_ROOM_TEMP), th.room_slope(self.samples, now, 12),
-            th.outdoor_past_mean(self.samples, now, 24), temps[: int(p.heat_lookahead_h * 4)], p,
+            th.outdoor_past_mean(self.samples, now, 24), temps[: int(p.heat_lookahead_h * 4)], p, cold_ahead,
         )
         curve = self._number(CONF_HEAT_CURVE)
         recent = self.samples[-3 * 96 :]

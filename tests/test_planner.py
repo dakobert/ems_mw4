@@ -486,3 +486,22 @@ def test_car_pv_during_absence_does_not_count():
     # steht das Auto zu Hause, reicht derselbe Überschuss
     plan = build_plan(SLOTS, prices, [False] * N, pv, [0.4] * N, [0.0] * N, 60.0, 55.0, True, 80.0, hist, P)
     assert plan["car"]["pv_deckt_bedarf"] is True and sum(plan["car_grid_kw"]) == 0
+
+
+def test_proactive_raises_days_before_cold():
+    from datetime import date
+    from custom_components.ems_mw4 import thermal as th
+    # heute 13 Grad im Mittel, in drei Tagen 6 Grad: Raum noch warm und stabil, trotzdem schon anheben
+    daily = [(date(2026, 10, 4), 13.0), (date(2026, 10, 5), 13.5), (date(2026, 10, 6), 12.0), (date(2026, 10, 7), 6.0),
+             (date(2026, 10, 9), 2.0)]
+    cold = th.coldest_day(daily, date(2026, 10, 4), 4)
+    assert cold == 6.0  # heute zählt nicht, der Tag in 5 Tagen auch nicht
+    adv = th.advise(21.5, 0.0, 13.0, [13.0] * 96, P, cold)
+    assert adv["early_k"] == 1.5 and adv["shift_k"] == 1.5 and "kälter" in adv["grund"]
+    # ist die Kälte da (Vergangenheit so kalt wie die Aussicht), fällt die Vorab-Anhebung weg
+    assert th.advise(21.5, 0.0, 6.0, [6.0] * 96, P, 6.0)["early_k"] == 0.0
+    # wird es nur milder oder bleibt über der Heizgrenze: nichts
+    assert th.advise(21.5, 0.0, 13.0, [13.0] * 96, P, 16.0)["shift_k"] == 0.0
+    # Raum schon deutlich zu warm: nicht noch anheben; Obergrenze gilt
+    assert th.advise(23.5, 0.0, 13.0, [13.0] * 96, P, 6.0)["shift_k"] <= 0.0
+    assert th.advise(20.0, -0.05, 15.0, [10.0] * 96, P, -5.0)["shift_k"] == P.heat_shift_max_k

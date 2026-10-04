@@ -65,6 +65,28 @@ async def async_fetch_temperatures(hass: HomeAssistant, entity_id: str) -> dict[
     return out
 
 
+async def async_fetch_daily_means(hass: HomeAssistant, entity_id: str) -> list[tuple[date, float]]:
+    """Tagesmitteltemperaturen der Prognose: Mittel aus Höchst- und Tiefstwert."""
+    try:
+        response = await hass.services.async_call(
+            "weather", "get_forecasts", {"entity_id": entity_id, "type": "daily"}, blocking=True, return_response=True
+        )
+    except Exception as err:  # noqa: BLE001
+        _LOGGER.warning("Tagesprognose nicht abrufbar: %s", err)
+        return []
+    out: list[tuple[date, float]] = []
+    for item in ((response or {}).get(entity_id) or {}).get("forecast") or []:
+        when = dt_util.parse_datetime(str(item.get("datetime")))
+        high, low = item.get("temperature"), item.get("templow")
+        if when is None or high is None or low is None:
+            continue
+        try:
+            out.append((dt_util.as_local(when).date(), (float(high) + float(low)) / 2.0))
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
 def pv_hours(hass: HomeAssistant, entities: list[str], today: date) -> dict[date, dict[str, float]]:
     """Stundenwerte der PV-Prognose für heute, morgen, übermorgen aus dem Attribut 'hours'."""
     out: dict[date, dict[str, float]] = {}

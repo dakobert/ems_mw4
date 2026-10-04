@@ -135,6 +135,8 @@ class Params:
     heat_comfort_base_c: float = 22.0  # Komforttemperatur der Stiebel ohne Verschiebung
     heat_lookahead_h: float = 24.0
     heat_outdoor_coupling: float = 0.15  # K Raum je K Außentemperatur-Änderung über die Vorausschau
+    heat_days_ahead: float = 4.0  # so viele Tage voraus wird auf Kälte geschaut
+    heat_days_gain: float = 0.2  # K Anhebung je K, das es kälter wird
     heat_shift_gain: float = 1.5
     heat_shift_max_k: float = 2.0
     heat_shift_min_k: float = 1.0

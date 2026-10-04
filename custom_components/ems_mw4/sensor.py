@@ -433,6 +433,8 @@ class EmsProactiveSensor(EmsPlanBase):
             "raum_trend_k_je_h": None if adv.get("slope_k_h") is None else round(adv["slope_k_h"], 3),
             "aussen_zuletzt_c": None if adv.get("out_past_c") is None else round(adv["out_past_c"], 1),
             "aussen_voraus_c": adv.get("out_ahead_c"),
+            "kaeltester_tag_voraus_c": adv.get("cold_ahead_c"),
+            "anhebung_wegen_kaelte_k": adv.get("early_k"),
             "komfort_soll_c": adv.get("comfort_target_c"),
             "komfort_ist_c": adv.get("comfort_now_c"),
             "heizkurve_ist": adv.get("curve_now"),

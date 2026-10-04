@@ -63,7 +63,7 @@ def _half_steps(value: float) -> float:
 
 def advise(
     room: float | None, slope_k_h: float | None, out_past: float | None, temps_ahead: list[float | None],
-    p: Params,
+    p: Params, cold_ahead: float | None = None,
 ) -> dict[str, Any]:
     """Empfohlene Verschiebung der Komforttemperatur (K, in 0,5er-Schritten) und die Begründung."""
     out: dict[str, Any] = {"shift_k": 0.0, "predicted_c": None, "grund": None, "slope_k_h": slope_k_h,
@@ -82,7 +82,14 @@ def advise(
     if out_ahead is not None and out_past is not None:
         predicted += p.heat_outdoor_coupling * (out_ahead - out_past)
     out["predicted_c"] = round(predicted, 2)
-    if out_ahead is not None and out_ahead >= p.heat_limit_c and predicted >= p.room_target_c:
+    # Kälte in den nächsten Tagen: schon jetzt anheben, der Estrich braucht ein bis zwei Tage
+    reference = out_past if out_past is not None else out_ahead
+    early = 0.0
+    if cold_ahead is not None and reference is not None and cold_ahead < p.heat_limit_c:
+        early = _half_steps(max(0.0, reference - cold_ahead) * p.heat_days_gain)
+    out["cold_ahead_c"] = None if cold_ahead is None else round(cold_ahead, 1)
+    out["early_k"] = early
+    if early <= 0 and out_ahead is not None and out_ahead >= p.heat_limit_c and predicted >= p.room_target_c:
         out["grund"] = "über Heizgrenze, kein Bedarf"
         return out
     deficit = p.room_target_c - predicted
@@ -96,8 +103,17 @@ def advise(
     else:
         shift = 0.0
         out["grund"] = "im Band"
+    if early > 0 and predicted <= p.room_target_c + p.room_band_up_c:
+        shift = min(p.heat_shift_max_k, max(shift, 0.0) + early)
+        out["grund"] = "es wird in den nächsten Tagen kälter, früh anheben"
     out["shift_k"] = shift
     return out
+
+
+def coldest_day(daily: list[tuple[Any, float]], today: Any, days: float) -> float | None:
+    """Kälteste Tagesmitteltemperatur der kommenden Tage (ohne heute)."""
+    values = [mean for day, mean in daily if 0 < (day - today).days <= days]
+    return min(values) if values else None
 
 
 def curve_target(current: float | None, shift_history: list[float], p: Params) -> float | None:
