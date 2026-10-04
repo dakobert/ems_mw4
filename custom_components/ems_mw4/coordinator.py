@@ -706,7 +706,7 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.last_written = written
 
     async def _async_wallbox(self, want: dict[str, Any]) -> dict[str, Any]:
-        """Wallbox setzen. Phasen nur ohne Last, höchstens alle 10 Minuten und 6-mal am Tag."""
+        """Wallbox setzen. Phasenwechsel höchstens alle 10 Minuten und 6-mal am Tag, die Box schaltet selbst um."""
         call = self.hass.services.async_call
         done: dict[str, Any] = {}
 
@@ -731,14 +731,11 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 kw = self.plan["car_kw"][self.plan_index()]
                 phases = 1 if psm == "one_phase" else 3
                 want["amp"] = max(6, min(16, round(kw * 1000 / (phases * 230))))
-            elif (self.data.get("wallbox_power") or 0) > 50:
-                if frc != "dont_charge":
-                    await call("select", "select_option", {"entity_id": CONF_GOE_FRC, "option": "dont_charge"}, blocking=True)
-                return {"frc": "dont_charge", "grund": "Phasenwechsel: warte auf Strom 0"}
             else:
+                # Die Wallbox unterbricht die Ladung für den Wechsel selbst, wie bei der Umschaltung in ihrer App
                 await call("select", "select_option", {"entity_id": CONF_GOE_PSM, "option": want["psm"]}, blocking=True)
                 self._psm_changes.append(now)
-                return {"psm": want["psm"], "grund": "Phasen umgeschaltet, Laden im nächsten Schritt"}
+                done["psm"] = want["psm"]
         if amp is not None and int(float(amp)) != want["amp"]:
             await call("number", "set_value", {"entity_id": CONF_GOE_AMP, "value": want["amp"]}, blocking=True)
             done["amp"] = want["amp"]
