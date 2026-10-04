@@ -121,7 +121,7 @@ class Params:
     fixed_fee_eur_day: float = 0.46
     # Heizung
     room_target_c: float = 21.0
-    room_band_up_c: float = 1.0
+    room_band_up_c: float = 0.3  # Roy: 21 Grad, 20,5 ist in Ordnung, mehr soll es nicht sein
     room_band_down_c: float = 0.5
     heat_block_enabled: bool = False
     heat_block_max_h: float = 3.0
@@ -132,10 +132,11 @@ class Params:
     heat_preheat_h: float = 2.0
     heat_preheat_loss: float = 1.1  # Mehrverbrauch durch höhere Vorlauftemperatur beim Vorheizen
     # Vorausschauend heizen (Fußbodenheizung ist träge)
-    heat_comfort_base_c: float = 22.0  # Komforttemperatur der Stiebel ohne Verschiebung
+    heat_comfort_base_c: float = 21.0  # Komforttemperatur der Stiebel ohne Verschiebung
     heat_lookahead_h: float = 24.0
     heat_outdoor_coupling: float = 0.15  # K Raum je K Außentemperatur-Änderung über die Vorausschau
     heat_days_ahead: float = 2.0  # so viele Tage voraus wird auf Kälte geschaut (Trägheit des Estrichs)
+    heat_early_room_margin_c: float = 1.0  # Vorab-Anhebung nur, solange der Raum nicht so weit über Soll liegt
     heat_days_gain: float = 0.2  # K Anhebung je K, das es kälter wird
     heat_shift_gain: float = 1.5
     heat_shift_max_k: float = 3.0

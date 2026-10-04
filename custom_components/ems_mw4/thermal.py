@@ -103,7 +103,7 @@ def advise(
     else:
         shift = 0.0
         out["grund"] = "im Band"
-    if early > 0 and predicted <= p.room_target_c + p.room_band_up_c:
+    if early > 0 and predicted <= p.room_target_c + p.heat_early_room_margin_c:
         shift = min(p.heat_shift_max_k, max(shift, 0.0) + early)
         out["grund"] = "es wird in den nächsten Tagen kälter, früh anheben"
     out["shift_k"] = shift
