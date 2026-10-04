@@ -706,7 +706,7 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.last_written = written
 
     async def _async_wallbox(self, want: dict[str, Any]) -> dict[str, Any]:
-        """Wallbox setzen. Phasenwechsel höchstens alle 10 Minuten und 6-mal am Tag, die Box schaltet selbst um."""
+        """Wallbox setzen. Phasenwechsel höchstens alle 10 Minuten, die Box schaltet selbst um."""
         call = self.hass.services.async_call
         done: dict[str, Any] = {}
 
@@ -726,7 +726,7 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             now = dt_util.utcnow()
             self._psm_changes = [t for t in self._psm_changes if (now - t).total_seconds() < 86400]
             too_soon = self._psm_changes and (now - self._psm_changes[-1]).total_seconds() < 600
-            if too_soon or len(self._psm_changes) >= 6:
+            if too_soon:
                 want = {**want, "psm": psm}  # Phasen bleiben, Strom passend zur vorhandenen Phasenzahl
                 kw = self.plan["car_kw"][self.plan_index()]
                 phases = 1 if psm == "one_phase" else 3
