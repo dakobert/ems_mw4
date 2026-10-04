@@ -501,7 +501,9 @@ def test_proactive_raises_days_before_cold():
     # ist die Kälte da (Vergangenheit so kalt wie die Aussicht), fällt die Vorab-Anhebung weg
     assert th.advise(21.5, 0.0, 6.0, [6.0] * 96, P, 6.0)["early_k"] == 0.0
     # wird es nur milder oder bleibt über der Heizgrenze: nichts
-    assert th.advise(21.5, 0.0, 13.0, [13.0] * 96, P, 16.0)["shift_k"] == 0.0
+    assert th.advise(21.2, 0.0, 13.0, [13.0] * 96, P, 16.0)["shift_k"] == 0.0
+    # ohne Kälte voraus und Raum über 21,3 Grad: leicht absenken
+    assert th.advise(21.5, 0.0, 13.0, [13.0] * 96, P, 16.0)["shift_k"] == -0.5
     # Raum schon deutlich zu warm: nicht noch anheben; Obergrenze gilt
     assert th.advise(23.5, 0.0, 13.0, [13.0] * 96, P, 6.0)["shift_k"] <= 0.0
     assert th.advise(20.0, -0.05, 15.0, [10.0] * 96, P, -5.0)["shift_k"] == P.heat_shift_max_k
