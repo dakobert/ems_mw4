@@ -11,7 +11,7 @@
   "iot_class": "calculated",
   "issue_tracker": "https://github.com/dakobert/ems_mw4/issues",
   "requirements": [],
-  "version": "0.13.0",
+  "version": "0.13.1",
   "single_config_entry": true,
   "after_dependencies": [
     "recorder"

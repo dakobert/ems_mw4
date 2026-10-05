@@ -143,7 +143,7 @@ class Params:
     heat_early_room_margin_c: float = 1.0  # Vorab-Anhebung nur, solange der Raum nicht so weit über Soll liegt
     heat_days_gain: float = 0.2  # K Anhebung je K, das es kälter wird
     heat_shift_gain: float = 1.5
-    heat_shift_max_k: float = 3.0
+    heat_shift_max_k: float = 5.0
     heat_shift_min_k: float = 1.0
     heat_curve_min: float = 0.35
     heat_curve_max: float = 0.50
@@ -212,7 +212,7 @@ SETTINGS: tuple[Setting, ...] = (
     Setting("heat_limit_c", "Heizgrenze", 10, 20, 0.5, "°C", "mdi:thermometer-lines"),
     Setting("room_target_c", "Raumtemperatur Soll", 18, 24, 0.5, "°C", "mdi:home-thermometer"),
     Setting("heat_comfort_base_c", "Heizung: Komforttemperatur Grundwert", 18, 25, 0.5, "°C", "mdi:thermometer"),
-    Setting("heat_shift_max_k", "Heizung: größte Anhebung", 0, 3, 0.5, "K", "mdi:arrow-up-bold"),
+    Setting("heat_shift_max_k", "Heizung: größte Anhebung", 0, 6, 0.5, "K", "mdi:arrow-up-bold"),
     Setting("heat_curve_min", "Heizkurve: kleinste Steilheit", 0.2, 1.0, 0.05, None, "mdi:chart-bell-curve-cumulative"),
     Setting("heat_curve_max", "Heizkurve: größte Steilheit", 0.2, 1.0, 0.05, None, "mdi:chart-bell-curve-cumulative"),
     Setting("heat_block_max_h", "Sperre: längste Dauer", 0.5, 3, 0.25, "h", "mdi:timer-sand"),
