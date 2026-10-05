@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 import logging
-from statistics import median
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
@@ -25,6 +24,7 @@ from .const import (  # noqa: I001
     Params,
     CONF_ROOM_SENSORS,
     DEFAULT_ROOM_SENSORS,
+    LEGACY_ROOM_SENSORS,
     DOMAIN,
     KEY_ROOM_TEMP,
     KEY_SAMPLES,
@@ -160,7 +160,8 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     @property
     def room_sensors(self) -> list[str]:
-        return list(self.config_entry.options.get(CONF_ROOM_SENSORS, DEFAULT_ROOM_SENSORS))
+        chosen = list(self.config_entry.options.get(CONF_ROOM_SENSORS, DEFAULT_ROOM_SENSORS))
+        return list(DEFAULT_ROOM_SENSORS) if sorted(chosen) == sorted(LEGACY_ROOM_SENSORS) else chosen
 
     async def async_load(self) -> None:
         """Gespeicherte Messreihe laden."""
@@ -210,7 +211,11 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             values.append(value)
         if not values:
             return None, 0
-        return round(median(values), 2), len(values)
+        # Der kühle Raum zählt, nicht der Durchschnitt: sonst friert man im Wohnzimmer, während das
+        # Mittel noch passt. Ab vier Fühlern der zweitkälteste, damit ein einzelner Ausreißer
+        # (Lüften, offene Haustür) nicht die Heizung treibt.
+        values.sort()
+        return round(values[1] if len(values) >= 4 else values[0], 2), len(values)
 
     async def _async_update_data(self) -> dict[str, Any]:
         now = dt_util.utcnow()

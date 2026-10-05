@@ -54,9 +54,9 @@ async def test_values_and_median(hass: HomeAssistant) -> None:
     assert data["pv_power"] == 2.0
     assert data["hp_power"] == 2000.0  # kW -> W
     assert data["compressor"] == 1.0
-    assert data["room_temp"] == 22.0  # Median aus 20..24
+    assert data["room_temp"] == 21.0  # zweitkältester aus 20..24
     assert data["sources_ok"] == len(SOURCES) + 1
-    assert hass.states.get("sensor.ems_mw4_raumtemperatur_referenz").state == "22.0"
+    assert hass.states.get("sensor.ems_mw4_raumtemperatur_referenz").state == "21.0"
     assert hass.states.get("sensor.ems_mw4_pv_leistung").state == "2.0"
 
 
@@ -113,7 +113,7 @@ async def test_sample_store_and_reload(hass: HomeAssistant, hass_storage) -> Non
     assert c.data["samples"] == 1
     assert await hass.config_entries.async_unload(entry.entry_id)
     await hass.async_block_till_done()
-    assert hass_storage["ems_mw4.messreihe"]["data"]["samples"][0]["room_temp"] == 22.0
+    assert hass_storage["ems_mw4.messreihe"]["data"]["samples"][0]["room_temp"] == 21.0
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
     assert len(entry.runtime_data.samples) == 1
@@ -132,7 +132,7 @@ async def test_options_flow(hass: HomeAssistant) -> None:
     assert result["type"] is FlowResultType.CREATE_ENTRY
     await hass.async_block_till_done()
     assert entry.runtime_data.data["pv_power"] == 777.0
-    assert entry.runtime_data.data["room_temp"] == 20.5
+    assert entry.runtime_data.data["room_temp"] == 20.0
 
 
 # ---------- Phase 2 ----------

@@ -16,7 +16,16 @@ ROOM_MAX_AGE_S = 3 * 3600
 
 CONF_ROOM_SENSORS = "room_sensors"
 
+# Wohnräume ohne Fremdwärme. Büro (Rechner) und Küche (Kochen, Sonne) sind bewusst nicht dabei.
 DEFAULT_ROOM_SENSORS = [
+    "sensor.temperatursensor_wohnzimmer_temperature",
+    "sensor.temperatursensor_bad_eg_temperature",
+    "sensor.temperatursensor_bad_og_temperature",
+    "sensor.temperatursensor_empfang_temperature",
+    "sensor.temperatursensor_wohnen_temperature",
+]
+# Auswahl bis 0.13.1; eine so gespeicherte Auswahl wird durch die neue ersetzt
+LEGACY_ROOM_SENSORS = [
     "sensor.temperatursensor_buro_temperature",
     "sensor.temperatursensor_bad_og_temperature",
     "sensor.temperatursensor_bad_eg_temperature",
