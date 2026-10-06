@@ -148,11 +148,11 @@ class Params:
     heat_comfort_base_c: float = 21.0  # Komforttemperatur der Stiebel ohne Verschiebung
     heat_lookahead_h: float = 24.0
     heat_outdoor_coupling: float = 0.15  # K Raum je K Außentemperatur-Änderung über die Vorausschau
-    heat_days_ahead: float = 2.0  # so viele Tage voraus wird auf Kälte geschaut (Trägheit des Estrichs)
-    heat_early_room_margin_c: float = 1.0  # Vorab-Anhebung nur, solange der Raum nicht so weit über Soll liegt
+    heat_days_ahead: float = 1.0  # so weit voraus wird auf Kälte geschaut; gemessen 06.10.2026: der Estrich reagiert binnen Stunden
+    heat_early_room_margin_c: float = 0.0  # Vorab-Anhebung nur, solange der Raum voraussichtlich nicht über Soll liegt
     heat_days_gain: float = 0.2  # K Anhebung je K, das es kälter wird
     heat_shift_gain: float = 1.5
-    heat_shift_max_k: float = 5.0
+    heat_shift_max_k: float = 3.0
     heat_shift_min_k: float = 1.0
     heat_curve_min: float = 0.35
     heat_curve_max: float = 0.50

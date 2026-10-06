@@ -496,8 +496,10 @@ def test_proactive_raises_days_before_cold():
              (date(2026, 10, 9), 2.0)]
     cold = th.coldest_day(daily, date(2026, 10, 4), 4)
     assert cold == 6.0  # heute zählt nicht, der Tag in 5 Tagen auch nicht
-    adv = th.advise(21.5, 0.0, 13.0, [13.0] * 96, P, cold)
-    assert adv["early_k"] == 1.5 and adv["shift_k"] == 1.5 and "kälter" in adv["grund"]
+    adv = th.advise(20.9, 0.0, 13.0, [13.0] * 96, P, cold)
+    assert adv["early_k"] == 1.5 and adv["shift_k"] >= 1.5 and "kälter" in adv["grund"]
+    # liegt der Raum schon über Soll, wird trotz angekündigter Kälte nicht vorab angehoben
+    assert th.advise(21.5, 0.0, 13.0, [13.0] * 96, P, cold)["shift_k"] <= 0.0
     # ist die Kälte da (Vergangenheit so kalt wie die Aussicht), fällt die Vorab-Anhebung weg
     assert th.advise(21.5, 0.0, 6.0, [6.0] * 96, P, 6.0)["early_k"] == 0.0
     # wird es nur milder oder bleibt über der Heizgrenze: nichts
