@@ -222,6 +222,8 @@ async def test_cost_tracking(hass: HomeAssistant) -> None:
 
 
 async def test_models_from_stats(hass: HomeAssistant) -> None:
+    from custom_components.ems_mw4 import coordinator as coord_mod
+    coord_mod.HEAT_DATA_FROM = "2000-01-01"
     _fill(hass)
     entry = await _setup(hass)
     c = entry.runtime_data
@@ -236,7 +238,7 @@ async def test_models_from_stats(hass: HomeAssistant) -> None:
     await _replan(hass, entry, stats=stats)
     assert len(c.base_profile) == 48
     assert abs(next(iter(c.base_profile.values())) - 500.0) < 1e-6  # 1500 - 800 - 200
-    assert abs(c.heat_w_per_k - 80.0) < 1e-6 and c.heat_fit_days >= 14
+    assert abs(c.heat_w_per_k - 800.0 / 14.0) < 1e-6 and c.heat_fit_days >= 14  # 800 W bei 14 K unter 19 °C
 
 
 # ---------- Einstellungen und Ausführer ----------

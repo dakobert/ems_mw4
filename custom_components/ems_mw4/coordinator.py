@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 import logging
 from typing import Any
 
@@ -40,7 +40,7 @@ from .const import (  # noqa: I001
 from .planner import build_plan
 from . import executor as ex
 from .const import (  # noqa: E402
-    CONF_DHW_TARGETS, CONF_GOE_AMP, CONF_GOE_FRC, CONF_GOE_PSM, CONF_SG_INPUT_1, CONF_SG_INPUT_2, MODBUS_BATTERY_SETPOINT,
+    CONF_DHW_TARGETS, HEAT_DATA_FROM, CONF_GOE_AMP, CONF_GOE_FRC, CONF_GOE_PSM, CONF_SG_INPUT_1, CONF_SG_INPUT_2, MODBUS_BATTERY_SETPOINT,
     MODBUS_HUB, MODBUS_SLAVE, PLAN_MAX_AGE_S, SWITCH_BATTERY, SWITCH_DHW, SWITCH_MASTER, SWITCH_WALLBOX,
     BLOCK_LOG_STORE_KEY, NOTIFY_SERVICE, SWITCH_HEATING, SWITCH_HEAT_BLOCK, SWITCH_QUIET,
     SWITCH_PROACTIVE, SWITCH_CURVE, SWITCH_CAR_NOW, CONF_COMFORT_TEMP, CONF_HEAT_CURVE, CONF_SUMMER_MODE, COMFORT_WRITE_GAP_S,
@@ -362,7 +362,8 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if long.get(hp) and long.get(out):
             hp_w = {k: v * hp_factor for k, v in long[hp].items()}
             self.heat_w_per_k, self.heat_fit_days = fc.fit_heat(
-                ems_data.heat_days(long[out], hp_w), self.params.heat_limit_c, self.params.heat_w_per_k
+                ems_data.heat_days(long[out], hp_w, date.fromisoformat(HEAT_DATA_FROM)),
+                self.params.heat_load_base_c, self.params.heat_w_per_k
             )
         self._model_day = today
 
@@ -404,7 +405,7 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             slots, ems_data.pv_hours(self.hass, [self.entity_for(k) for k in PV_FORECAST_KEYS], now.date())
         )
         base = fc.base_load_series(slots, self.base_profile, self.params.base_load_default_w)
-        heat = fc.heat_series(temps, self.params.heat_limit_c, self.heat_w_per_k)
+        heat = fc.heat_series(temps, self.params.heat_load_base_c, self.heat_w_per_k)
         history = [s.get("price") for s in self.samples[-14 * 96 :] if s.get("price") is not None]
         if len(history) < 2 * 96:
             history = list(known.values())

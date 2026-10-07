@@ -13,6 +13,8 @@ STORE_VERSION = 1
 STORE_KEY = f"{DOMAIN}.messreihe"
 MAX_SAMPLES = 120 * 96  # 120 Tage im 15-Minuten-Raster
 ROOM_MAX_AGE_S = 3 * 3600
+# Bis 05.10.2026 abends waren die Heizkreise abgesperrt: Tage davor taugen nicht zum Lernen der Heizlast.
+HEAT_DATA_FROM = "2026-10-06"
 
 CONF_ROOM_SENSORS = "room_sensors"
 
@@ -106,7 +108,10 @@ class Params:
     battery_step_kwh: float = 0.02
     feed_in_ct: float = 6.9
     heat_limit_c: float = 15.0
-    heat_w_per_k: float = 60.0  # elektrisch, Startwert bis genug Daten vorliegen
+    # Heizlast-Prognose, gemessen in der Nacht 06./07.10.2026: rund 390 W im Mittel bei 15 °C außen.
+    # Die Wärmepumpe läuft also schon weit über der Heizgrenze von 15 °C; der Bezugspunkt liegt bei 19 °C.
+    heat_load_base_c: float = 19.0
+    heat_w_per_k: float = 90.0  # elektrisch je Kelvin unter dem Bezugspunkt, Startwert bis genug Tage vorliegen
     dhw_kwh: float = 1.5
     dhw_kw: float = 2.0
     dhw_skip_above_c: float = 48.0

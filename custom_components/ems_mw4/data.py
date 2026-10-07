@@ -142,7 +142,7 @@ def base_rows(home: dict[datetime, float], hp_w: dict[datetime, float], wallbox:
     return rows
 
 
-def heat_days(outdoor: dict[datetime, float], hp_w: dict[datetime, float]) -> list[tuple[float, float]]:
+def heat_days(outdoor: dict[datetime, float], hp_w: dict[datetime, float], since: date | None = None) -> list[tuple[float, float]]:
     """Tagesmittel (Außentemperatur, Wärmepumpenleistung W), nur vollständige Tage."""
     temps: dict[date, list[float]] = defaultdict(list)
     power: dict[date, list[float]] = defaultdict(list)
@@ -152,6 +152,8 @@ def heat_days(outdoor: dict[datetime, float], hp_w: dict[datetime, float]) -> li
         power[dt_util.as_local(when).date()].append(value)
     out = []
     for day, values in temps.items():
+        if since is not None and day < since:
+            continue
         if len(values) >= 20 and len(power.get(day, [])) >= 20:
             out.append((sum(values) / len(values), sum(power[day]) / len(power[day])))
     return out

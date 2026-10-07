@@ -95,7 +95,7 @@ def fit_heat(days: Iterable[tuple[float, float]], limit_c: float, default_w_per_
         num += delta * watts
         den += delta * delta
         count += 1
-    if count < 14 or den <= 0:
+    if count < 7 or den <= 0:
         return default_w_per_k, count
     return min(250.0, max(10.0, num / den)), count
 
