@@ -282,7 +282,7 @@ def test_decide() -> None:
     assert d["dhw"] is True and d["car"] == {"frc": "charge", "psm": "three_phases", "amp": 16}
     d = ex.decide(_mini_plan("Leerlauf", 0.0), 0, ok, 60, 2700, p)
     assert d["dhw"] is False and d["car"] == {"frc": "dont_charge"}
-    d = ex.decide(_mini_plan("Leerlauf", 0.0, car=11.0), 0, {**ok, "car_connected": 0.0, "sg_ready": None}, 60, 2700, p)
+    d = ex.decide(_mini_plan("Leerlauf", 0.0, car=11.0), 0, {**ok, "car_connected": 0.0, "dhw_temp": None}, 60, 2700, p)
     assert d["car"] is None and d["dhw"] is None
 
 
@@ -319,7 +319,7 @@ async def test_executor_active_writes_battery_and_respects_device_switch(hass: H
     await c.async_execute()
     assert len(calls) == 1
     assert calls[0].data == {"hub": "Kostal-BYD", "slave": 71, "address": 1034, "value": [0, 0]}
-    assert c.last_written == {"battery_w": 0, "sg_ready": 2, "dhw": False}
+    assert c.last_written == {"battery_w": 0, "sg_ready": 2, "dhw": False, "dhw_soll_c": 40.0}
     await hass.services.async_call("switch", "turn_off", {"entity_id": "switch.ems_mw4_automatik_speicher"}, blocking=True)
     await c.async_execute()
     assert len(calls) == 1  # Speicher-Automatik aus: kein weiterer Befehl
@@ -342,7 +342,7 @@ async def test_setting_changes_params(hass: HomeAssistant) -> None:
 
 
 def test_sg_state() -> None:
-    assert ex.sg_state(True, "sperre", True, True) == 3  # Warmwasser geht vor
+    assert ex.sg_state(True, "sperre", True, True) == 2  # Warmwasser verhindert die Sperre, lädt aber über den Sollwert
     assert ex.sg_state(False, "sperre", True, True) == 1
     assert ex.sg_state(False, "ruhe", True, True) == 1
     assert ex.sg_state(False, "vorheizen", True, True) == 3
@@ -413,3 +413,14 @@ async def test_quiet_slots(hass: HomeAssistant) -> None:
     start, end = c.quiet_slots(slots)
     assert slots[start].hour == 23 and slots[start].minute == 0
     assert end - start == 16 and slots[end].hour == 3  # 23 bis 3 Uhr, nur die erste Nacht
+
+
+def test_dhw_target() -> None:
+    from custom_components.ems_mw4.const import Params
+    p = Params()
+    assert ex.dhw_target(False, 45.0, False, p) == (40.0, False)
+    assert ex.dhw_target(None, 45.0, True, p) == (40.0, False)  # Fenster vorbei: Merker zurück
+    assert ex.dhw_target(True, 50.0, False, p) == (57.0, False)
+    assert ex.dhw_target(True, 55.2, False, p) == (40.0, True)  # Schwelle erreicht: fertig
+    assert ex.dhw_target(True, 53.0, True, p) == (40.0, True)  # im selben Fenster nicht erneut laden
+    assert ex.dhw_target(True, None, False, p) == (57.0, False)

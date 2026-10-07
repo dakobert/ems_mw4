@@ -44,8 +44,8 @@ def decide(plan: dict[str, Any] | None, i: int | None, data: dict[str, Any], pla
         out["battery_w"], out["battery"] = watts, f"Netzladen {-watts} W"
     elif action == "Halten" and soc > p.battery_min_soc:
         out["battery_w"], out["battery"] = 0, "Entladen gesperrt"
-    # Warmwasser: SG Ready Zustand 3 im geplanten Slot
-    if data.get("dhw_temp") is not None and data.get("sg_ready") is not None:
+    # Warmwasser: im geplanten Slot wird der Sollwert angehoben
+    if data.get("dhw_temp") is not None:
         out["dhw"] = plan["dhw_kw"][i] > 0
     # Heizung: Vorheizen = Zustand 3, Sperre/Ruhe = Zustand 1. Abbruch, wenn der Raum zu kalt wird.
     mode = (plan.get("heat_mode") or ["normal"] * (i + 1))[i]
@@ -81,14 +81,14 @@ def sg_state(dhw: bool | None, heat: str | None, auto_dhw: bool, auto_heat: bool
     """SG-Ready-Zielzustand aus Warmwasser- und Heizungswunsch. None = nichts anfassen.
 
     1 = Sperre (Eingang 2 an), 2 = normal, 3 = anheben (Eingang 1 an). Zustand 4 wird nie gesetzt.
-    Warmwasser im geplanten Fenster geht vor einer Sperre.
+    Warmwasser läuft über die Sollwerte; im geplanten Fenster verhindert es nur eine Sperre.
     """
     want_dhw = bool(dhw) and auto_dhw
     known = (dhw is not None and auto_dhw) or (heat is not None and auto_heat)
     if not known:
         return None
     if want_dhw:
-        return 3
+        return 2
     if auto_heat and heat in ("sperre", "ruhe"):
         return 1
     if auto_heat and heat == "vorheizen":
@@ -97,3 +97,16 @@ def sg_state(dhw: bool | None, heat: str | None, auto_dhw: bool, auto_heat: bool
 
 
 SG_INPUTS = {1: ("off", "on"), 2: ("off", "off"), 3: ("on", "off")}
+
+
+def dhw_target(want: bool | None, temp: float | None, done: bool, p: Params) -> tuple[float, bool]:
+    """Warmwasser-Sollwert und ob die Ladung dieses Fensters erledigt ist.
+
+    Im geplanten Fenster gilt der Ladesollwert, bis der Speicher die Hochlade-Schwelle erreicht hat.
+    Danach und außerhalb des Fensters gilt der Grundwert. Endet das Fenster, beginnt die nächste Ladung neu.
+    """
+    if not want:
+        return p.dhw_base_c, False
+    if done or (temp is not None and temp >= p.dhw_hot_c):
+        return p.dhw_base_c, True
+    return p.dhw_charge_c, False

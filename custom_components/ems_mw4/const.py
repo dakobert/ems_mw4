@@ -110,6 +110,8 @@ class Params:
     dhw_kwh: float = 1.5
     dhw_kw: float = 2.0
     dhw_skip_above_c: float = 48.0
+    dhw_base_c: float = 40.0  # Sollwert außerhalb einer Ladung; Sicherheitsnetz, darunter heizt die Stiebel selbst
+    dhw_charge_c: float = 57.0  # Sollwert während einer geplanten Ladung
     dhw_hot_c: float = 55.0  # ab hier zählt eine Ladung als Hochladung (Legionellenschutz)
     dhw_hot_force_days: float = 6.0  # so lange ohne Hochladung: nächste Tagesladung wird nicht ausgelassen
     dhw_hot_warn_days: float = 8.0  # so lange ohne Hochladung: Push
@@ -181,6 +183,12 @@ SWITCH_PROACTIVE = "heat_proactive"
 SWITCH_CURVE = "heat_curve_auto"
 SWITCH_CAR_NOW = "car_now"
 CONF_COMFORT_TEMP = "number.stiebel_eltron_isg_comfort_temperature_target_hk1"
+# Warmwasser wird über die Sollwerte geladen, nicht über SG Ready: Das Energiemanagement des ISG
+# verstellt bei Zustand 3 auch die Heizung und schreibt danach alte Sollwerte zurück (06./07.10.2026).
+CONF_DHW_TARGETS = (
+    "number.stiebel_eltron_isg_comfort_water_temperature_target",
+    "number.stiebel_eltron_isg_eco_water_temperature_target",
+)
 CONF_HEAT_CURVE = "number.stiebel_eltron_isg_heating_curve_rise_hk1"
 CONF_SUMMER_MODE = "binary_sensor.stiebel_eltron_isg_is_in_summer_mode"
 COMFORT_WRITE_GAP_S = 3 * 3600

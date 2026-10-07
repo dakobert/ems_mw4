@@ -40,7 +40,7 @@ from .const import (  # noqa: I001
 from .planner import build_plan
 from . import executor as ex
 from .const import (  # noqa: E402
-    CONF_GOE_AMP, CONF_GOE_FRC, CONF_GOE_PSM, CONF_SG_INPUT_1, CONF_SG_INPUT_2, MODBUS_BATTERY_SETPOINT,
+    CONF_DHW_TARGETS, CONF_GOE_AMP, CONF_GOE_FRC, CONF_GOE_PSM, CONF_SG_INPUT_1, CONF_SG_INPUT_2, MODBUS_BATTERY_SETPOINT,
     MODBUS_HUB, MODBUS_SLAVE, PLAN_MAX_AGE_S, SWITCH_BATTERY, SWITCH_DHW, SWITCH_MASTER, SWITCH_WALLBOX,
     BLOCK_LOG_STORE_KEY, NOTIFY_SERVICE, SWITCH_HEATING, SWITCH_HEAT_BLOCK, SWITCH_QUIET,
     SWITCH_PROACTIVE, SWITCH_CURVE, SWITCH_CAR_NOW, CONF_COMFORT_TEMP, CONF_HEAT_CURVE, CONF_SUMMER_MODE, COMFORT_WRITE_GAP_S,
@@ -742,8 +742,17 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 if state is not None and state.state in ("on", "off") and state.state != want:
                     await call("switch", f"turn_{want}", {"entity_id": entity_id}, blocking=True)
             written["sg_ready"] = target
-            if self.switches[SWITCH_DHW] and intent.get("dhw") is not None:
-                written["dhw"] = intent["dhw"]
+        # Warmwasser über die Sollwerte. Weicht ein Sollwert ab (Lernfunktion der Stiebel, Bedienteil,
+        # Servicewelt), wird er im selben Lauf wieder gesetzt.
+        if self.switches[SWITCH_DHW] and intent.get("dhw") is not None:
+            want_c, self._dhw_done = ex.dhw_target(
+                intent["dhw"], (self.data or {}).get("dhw_temp"), getattr(self, "_dhw_done", False), self.params)
+            for entity_id in CONF_DHW_TARGETS:
+                current = self._number(entity_id)
+                if current is not None and abs(current - want_c) > 0.05:
+                    await call("number", "set_value", {"entity_id": entity_id, "value": want_c}, blocking=True)
+            written["dhw"] = want_c > self.params.dhw_base_c
+            written["dhw_soll_c"] = want_c
         if self.switches[SWITCH_HEATING] and self.switches[SWITCH_PROACTIVE]:
             written.update(await self._async_proactive())
         elif self._comfort_touched and self._number(CONF_COMFORT_TEMP) is not None:
@@ -805,6 +814,11 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             state = self.hass.states.get(entity_id)
             if state is not None and state.state == "on":
                 await call("switch", "turn_off", {"entity_id": entity_id}, blocking=True)
+        # eine laufende Warmwasserladung beenden: Sollwerte zurück auf den Grundwert
+        for entity_id in CONF_DHW_TARGETS:
+            current = self._number(entity_id)
+            if current is not None and current > self.params.dhw_base_c + 0.5 and getattr(self, "_dhw_done", None) is not None:
+                await call("number", "set_value", {"entity_id": entity_id, "value": self.params.dhw_base_c}, blocking=True)
         state = self.hass.states.get(CONF_GOE_FRC)
         if state is not None and state.state in ("charge", "dont_charge"):
             await call("select", "select_option", {"entity_id": CONF_GOE_FRC, "option": "neutral"}, blocking=True)
