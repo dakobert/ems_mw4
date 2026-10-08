@@ -110,3 +110,24 @@ def dhw_target(want: bool | None, temp: float | None, done: bool, p: Params) -> 
     if done or (temp is not None and temp >= p.dhw_hot_c):
         return p.dhw_base_c, True
     return p.dhw_charge_c, False
+
+
+def pv_dhw(data: dict[str, Any], latched_min: float | None, done_today: bool, p: Params) -> tuple[bool, bool]:
+    """Warmwasser mit PV-Überschuss laden, auch wenn der Speicher über der Tagesschwelle liegt.
+
+    Start: Hausspeicher voll und mindestens dhw_pv_export_w Einspeisung. Läuft die Ladung einmal,
+    bleibt sie an (der Verdichter frisst den Überschuss selbst), bis die Hochlade-Schwelle erreicht
+    oder dhw_pv_max_min vergangen ist. Höchstens einmal am Tag.
+    Rückgabe: (jetzt laden, für heute erledigt).
+    """
+    temp = data.get("dhw_temp")
+    if latched_min is not None:
+        if (temp is not None and temp >= p.dhw_hot_c) or latched_min >= p.dhw_pv_max_min:
+            return False, True
+        return True, False
+    if done_today or temp is None or temp >= p.dhw_hot_c:
+        return False, done_today
+    soc, grid = data.get("battery_soc"), data.get("grid_power")
+    if soc is not None and grid is not None and soc >= p.dhw_pv_soc and -grid >= p.dhw_pv_export_w:
+        return True, False
+    return False, False

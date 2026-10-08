@@ -746,8 +746,22 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # Warmwasser über die Sollwerte. Weicht ein Sollwert ab (Lernfunktion der Stiebel, Bedienteil,
         # Servicewelt), wird er im selben Lauf wieder gesetzt.
         if self.switches[SWITCH_DHW] and intent.get("dhw") is not None:
+            data = self.data or {}
+            now = dt_util.now()
+            since = getattr(self, "_pv_dhw_since", None)
+            done_day = getattr(self, "_pv_dhw_day", None)
+            pv_on, pv_done = ex.pv_dhw(
+                data, None if since is None else (now - since).total_seconds() / 60, done_day == now.date(), self.params)
+            if pv_on and since is None:
+                self._pv_dhw_since = now
+            if not pv_on:
+                self._pv_dhw_since = None
+            if pv_done:
+                self._pv_dhw_day = now.date()
             want_c, self._dhw_done = ex.dhw_target(
-                intent["dhw"], (self.data or {}).get("dhw_temp"), getattr(self, "_dhw_done", False), self.params)
+                intent["dhw"] or pv_on, data.get("dhw_temp"), getattr(self, "_dhw_done", False) and not pv_on, self.params)
+            if pv_on:
+                written["dhw_pv"] = True
             for entity_id in CONF_DHW_TARGETS:
                 current = self._number(entity_id)
                 if current is not None and abs(current - want_c) > 0.05:

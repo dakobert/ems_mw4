@@ -117,6 +117,9 @@ class Params:
     dhw_skip_above_c: float = 48.0
     dhw_base_c: float = 40.0  # Sollwert außerhalb einer Ladung; Sicherheitsnetz, darunter heizt die Stiebel selbst
     dhw_charge_c: float = 57.0  # Sollwert während einer geplanten Ladung
+    dhw_pv_soc: float = 95.0  # Warmwasser mit PV-Überschuss: Hausspeicher mindestens so voll
+    dhw_pv_export_w: float = 1500.0  # und mindestens so viel Einspeisung
+    dhw_pv_max_min: float = 45.0  # längste Dauer einer Überschuss-Ladung
     dhw_hot_c: float = 55.0  # ab hier zählt eine Ladung als Hochladung (Legionellenschutz)
     dhw_hot_force_days: float = 6.0  # so lange ohne Hochladung: nächste Tagesladung wird nicht ausgelassen
     dhw_hot_warn_days: float = 8.0  # so lange ohne Hochladung: Push

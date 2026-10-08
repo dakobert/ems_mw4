@@ -426,3 +426,16 @@ def test_dhw_target() -> None:
     assert ex.dhw_target(True, 55.2, False, p) == (40.0, True)  # Schwelle erreicht: fertig
     assert ex.dhw_target(True, 53.0, True, p) == (40.0, True)  # im selben Fenster nicht erneut laden
     assert ex.dhw_target(True, None, False, p) == (57.0, False)
+
+
+def test_pv_dhw() -> None:
+    from custom_components.ems_mw4.const import Params
+    p = Params()
+    full = {"dhw_temp": 50.0, "battery_soc": 99.0, "grid_power": -2000.0}
+    assert ex.pv_dhw(full, None, False, p) == (True, False)  # Start
+    assert ex.pv_dhw({**full, "grid_power": -500.0}, None, False, p) == (False, False)  # zu wenig Überschuss
+    assert ex.pv_dhw({**full, "battery_soc": 80.0}, None, False, p) == (False, False)  # Speicher nicht voll
+    assert ex.pv_dhw(full, None, True, p) == (False, True)  # heute schon erledigt
+    assert ex.pv_dhw({**full, "grid_power": 2500.0}, 10.0, False, p) == (True, False)  # läuft weiter trotz Bezug
+    assert ex.pv_dhw({**full, "dhw_temp": 55.1}, 10.0, False, p) == (False, True)  # Ziel erreicht
+    assert ex.pv_dhw(full, 46.0, False, p) == (False, True)  # Zeit abgelaufen
