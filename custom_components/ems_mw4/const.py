@@ -13,6 +13,7 @@ STORE_VERSION = 1
 STORE_KEY = f"{DOMAIN}.messreihe"
 MAX_SAMPLES = 120 * 96  # 120 Tage im 15-Minuten-Raster
 ROOM_MAX_AGE_S = 3 * 3600
+ROOM_FROZEN_S = 4 * 3600  # so lange exakt derselbe Wert: Fühler gilt als stumm
 # Bis 05.10.2026 abends waren die Heizkreise abgesperrt: Tage davor taugen nicht zum Lernen der Heizlast.
 HEAT_DATA_FROM = "2026-10-06"
 

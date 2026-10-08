@@ -30,6 +30,7 @@ from .const import (  # noqa: I001
     KEY_SAMPLES,
     KEY_SOURCES_OK,
     MAX_SAMPLES,
+    ROOM_FROZEN_S,
     ROOM_MAX_AGE_S,
     SOURCES,
     STORE_KEY,
@@ -106,6 +107,7 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.plan_status: str = "noch kein Plan"
         self.base_profile: dict[tuple[bool, int], float] = {}
         self.heat_w_per_k: float = self.params.heat_w_per_k
+        self._room_seen: dict[str, tuple[float, datetime]] = {}
         self.heat_fit_days: int = 0
         self._model_day: Any = None
         self._replanning = False
@@ -207,6 +209,13 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if value is None:
                 continue
             if (now - state.last_reported).total_seconds() > ROOM_MAX_AGE_S:
+                continue
+            # Ein Neustart spielt den letzten Wert mit neuem Zeitstempel zurück (08.10.2026: zwei Fühler
+            # seit Mittag stumm). Deshalb zusätzlich: Wert seit Stunden unverändert = Fühler gilt als stumm.
+            seen = self._room_seen.get(entity_id)
+            if seen is None or seen[0] != value:
+                self._room_seen[entity_id] = (value, now)
+            elif (now - seen[1]).total_seconds() > ROOM_FROZEN_S:
                 continue
             values.append(value)
         if not values:

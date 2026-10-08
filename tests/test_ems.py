@@ -439,3 +439,20 @@ def test_pv_dhw() -> None:
     assert ex.pv_dhw({**full, "grid_power": 2500.0}, 10.0, False, p) == (True, False)  # läuft weiter trotz Bezug
     assert ex.pv_dhw({**full, "dhw_temp": 55.1}, 10.0, False, p) == (False, True)  # Ziel erreicht
     assert ex.pv_dhw(full, 46.0, False, p) == (False, True)  # Zeit abgelaufen
+
+
+async def test_room_frozen_sensor_dropped(hass: HomeAssistant) -> None:
+    _fill(hass)
+    entry = await _setup(hass)
+    c = entry.runtime_data
+    now = dt_util.utcnow()
+    _, used = c._room_temperature(now)
+    assert used == 5
+    # erster Fühler: seit fünf Stunden derselbe Wert, obwohl der Zeitstempel frisch ist (Neustart)
+    first = DEFAULT_ROOM_SENSORS[0]
+    c._room_seen[first] = (c._room_seen[first][0], now - timedelta(hours=5))
+    _, used = c._room_temperature(now)
+    assert used == 4
+    hass.states.async_set(first, "25.5")  # meldet sich wieder mit neuem Wert
+    _, used = c._room_temperature(now)
+    assert used == 5
