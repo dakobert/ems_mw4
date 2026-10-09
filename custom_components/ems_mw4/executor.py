@@ -129,13 +129,16 @@ def sg_state(dhw: bool | None, heat: str | None, auto_dhw: bool, auto_heat: bool
 SG_INPUTS = {1: ("off", "on"), 2: ("off", "off"), 3: ("on", "off")}
 
 
-def dhw_target(want: bool | None, temp: float | None, done: bool, p: Params) -> tuple[float, bool]:
+def dhw_target(want: bool | None, temp: float | None, done: bool, p: Params,
+               running_min: float | None = None) -> tuple[float, bool]:
     """Warmwasser-Sollwert und ob die Ladung dieses Fensters erledigt ist.
 
     Im geplanten Fenster gilt der Ladesollwert, bis der Speicher die Hochlade-Schwelle erreicht hat.
-    Danach und außerhalb des Fensters gilt der Grundwert. Endet das Fenster, beginnt die nächste Ladung neu.
+    Eine begonnene Ladung läuft über das Fensterende hinaus weiter, bis die Schwelle erreicht ist,
+    höchstens dhw_max_min ab Beginn. Danach und außerhalb des Fensters gilt der Grundwert.
     """
-    if not want:
+    active = bool(want) or (running_min is not None and running_min < p.dhw_max_min)
+    if not active:
         return p.dhw_base_c, False
     if done or (temp is not None and temp >= p.dhw_hot_c):
         return p.dhw_base_c, True

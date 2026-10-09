@@ -769,8 +769,14 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 self._pv_dhw_since = None
             if pv_done:
                 self._pv_dhw_day = now.date()
+            run_since = getattr(self, "_dhw_run_since", None)
             want_c, self._dhw_done = ex.dhw_target(
-                intent["dhw"] or pv_on, data.get("dhw_temp"), getattr(self, "_dhw_done", False) and not pv_on, self.params)
+                intent["dhw"] or pv_on, data.get("dhw_temp"), getattr(self, "_dhw_done", False) and not pv_on, self.params,
+                None if run_since is None else (now - run_since).total_seconds() / 60)
+            if want_c > self.params.dhw_base_c:
+                self._dhw_run_since = run_since or now
+            else:
+                self._dhw_run_since = None
             if pv_on:
                 written["dhw_pv"] = True
             for entity_id in CONF_DHW_TARGETS:

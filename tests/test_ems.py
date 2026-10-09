@@ -466,6 +466,10 @@ def test_dhw_target() -> None:
     assert ex.dhw_target(True, 55.2, False, p) == (40.0, True)  # Schwelle erreicht: fertig
     assert ex.dhw_target(True, 53.0, True, p) == (40.0, True)  # im selben Fenster nicht erneut laden
     assert ex.dhw_target(True, None, False, p) == (57.0, False)
+    # Fenster vorbei, Ladung läuft seit 20 min, Schwelle nicht erreicht: weiterladen
+    assert ex.dhw_target(False, 50.5, False, p, 20.0) == (57.0, False)
+    assert ex.dhw_target(False, 55.1, False, p, 30.0) == (40.0, True)
+    assert ex.dhw_target(False, 52.0, False, p, 95.0) == (40.0, False)  # Höchstdauer überschritten
 
 
 def test_pv_dhw() -> None:

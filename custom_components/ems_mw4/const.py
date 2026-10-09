@@ -122,6 +122,7 @@ class Params:
     dhw_pv_export_w: float = 1500.0  # und mindestens so viel Einspeisung
     dhw_pv_max_min: float = 45.0  # längste Dauer einer Überschuss-Ladung
     dhw_hot_c: float = 55.0  # ab hier zählt eine Ladung als Hochladung (Legionellenschutz)
+    dhw_max_min: float = 90.0  # begonnene Ladung läuft bis zur Schwelle, höchstens so lange
     dhw_hot_force_days: float = 6.0  # so lange ohne Hochladung: nächste Tagesladung wird nicht ausgelassen
     dhw_hot_warn_days: float = 8.0  # so lange ohne Hochladung: Push
     dhw_force: bool = False
