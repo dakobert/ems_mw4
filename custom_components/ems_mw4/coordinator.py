@@ -149,6 +149,8 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.intent: dict[str, Any] = {"grund": "noch nicht gerechnet"}
         self.last_written: dict[str, Any] = {}
         self._psm_changes: list[datetime] = []
+        self._car_avail: list[tuple[datetime, float]] = []  # PV-Laden: verfügbare Leistung je Lauf
+        self._car_pv_changed: datetime | None = None
         # Plangenauigkeit: nur Auswertung
         self._accuracy_store: Store[dict[str, Any]] = Store(hass, STORE_VERSION, ACCURACY_STORE_KEY)
         self.accuracy: dict[str, Any] = acc.new_state()
@@ -804,10 +806,15 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         frc, psm, amp = current(CONF_GOE_FRC), current(CONF_GOE_PSM), current(CONF_GOE_AMP)
         if frc is None:
             return {"grund": "Wallbox nicht erreichbar"}
+        if want["frc"] == "pv":
+            want = self._car_pv_want(psm, frc)
+            if "grund" in want:
+                return want
         if want["frc"] == "dont_charge":
             if frc != "dont_charge":
                 await call("select", "select_option", {"entity_id": CONF_GOE_FRC, "option": "dont_charge"}, blocking=True)
                 done["frc"] = "dont_charge"
+                self._car_pv_changed = dt_util.utcnow()
             return done
         if psm is not None and psm != want["psm"]:
             now = dt_util.utcnow()
@@ -815,7 +822,7 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             too_soon = self._psm_changes and (now - self._psm_changes[-1]).total_seconds() < 600
             if too_soon:
                 want = {**want, "psm": psm}  # Phasen bleiben, Strom passend zur vorhandenen Phasenzahl
-                kw = self.plan["car_kw"][self.plan_index()]
+                kw = want["kw"]
                 phases = 1 if psm == "one_phase" else 3
                 want["amp"] = max(6, min(16, round(kw * 1000 / (phases * 230))))
             else:
@@ -829,7 +836,38 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if frc != "charge":
             await call("select", "select_option", {"entity_id": CONF_GOE_FRC, "option": "charge"}, blocking=True)
             done["frc"] = "charge"
+        if done:
+            self._car_pv_changed = dt_util.utcnow()
+        if "pv_kw" in want:
+            done["pv_kw"] = want["pv_kw"]
         return done
+
+    def _state_float(self, key: str) -> float | None:
+        state = self.hass.states.get(self.entity_for(key))
+        try:
+            return float(state.state) if state is not None else None
+        except ValueError:
+            return None
+
+    def _car_pv_want(self, psm: str | None, frc: str) -> dict[str, Any]:
+        """PV-Laden: Mittel der verfügbaren Leistung über car_pv_avg_s, Änderung höchstens alle car_pv_hold_s."""
+        p, now = self.params, dt_util.utcnow()
+        wb, grid, batt = (self._state_float(k) for k in ("wallbox_power", "grid_power", "battery_power"))
+        if wb is None or grid is None or batt is None:
+            return {"grund": "PV-Laden: Messwerte fehlen"}
+        soc = (self.data or {}).get("battery_soc")
+        self._car_avail.append((now, ex.car_available_w(wb, grid, batt, soc, p)))
+        self._car_avail = [(t, w) for t, w in self._car_avail if (now - t).total_seconds() <= p.car_pv_avg_s]
+        span = (now - self._car_avail[0][0]).total_seconds()
+        if span < p.car_pv_avg_s * 0.8:
+            return {"grund": "PV-Laden: Mittelwert läuft an"}
+        if self._car_pv_changed is not None and (now - self._car_pv_changed).total_seconds() < p.car_pv_hold_s:
+            return {"grund": "PV-Laden: Haltezeit"}
+        avg_kw = sum(w for _, w in self._car_avail) / len(self._car_avail) / 1000.0
+        target = ex.car_pv_setpoint(avg_kw, psm, p)
+        if target is None:
+            return {"frc": "dont_charge", "pv_kw": round(avg_kw, 2)}
+        return {"frc": "charge", "psm": target[0], "amp": target[1], "kw": avg_kw, "pv_kw": round(avg_kw, 2)}
 
     async def async_release(self) -> None:
         """Steuerung abgeben: Speicher fällt nach 60 s von selbst zurück, SG Ready normal, Wallbox neutral."""

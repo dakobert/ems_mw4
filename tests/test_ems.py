@@ -281,11 +281,29 @@ def test_decide() -> None:
     assert ex.decide(_mini_plan("Netzladen", -3.0), 0, ok, 5000, 2700, p)["grund"] == "Plan veraltet"
     assert ex.decide(None, None, ok, None, 2700, p)["grund"] == "kein Plan"
     d = ex.decide(_mini_plan("Leerlauf", 0.0, dhw=2.0, car=11.0), 0, ok, 60, 2700, p)
-    assert d["dhw"] is True and d["car"] == {"frc": "charge", "psm": "three_phases", "amp": 16}
+    assert d["dhw"] is True and d["car"] == {"frc": "charge", "psm": "three_phases", "amp": 16, "kw": 11.0}
     d = ex.decide(_mini_plan("Leerlauf", 0.0), 0, ok, 60, 2700, p)
-    assert d["dhw"] is False and d["car"] == {"frc": "dont_charge"}
+    assert d["dhw"] is False and d["car"] == {"frc": "pv"}  # kein Netzladen geplant: PV-Überschuss
+    d = ex.decide(_mini_plan("Leerlauf", 0.0), 0, {**ok, "car_soc": 100.0}, 60, 2700, p)
+    assert d["car"] == {"frc": "dont_charge"}  # Ladeziel erreicht
     d = ex.decide(_mini_plan("Leerlauf", 0.0, car=11.0), 0, {**ok, "car_connected": 0.0, "dhw_temp": None}, 60, 2700, p)
     assert d["car"] is None and d["dhw"] is None
+
+
+def test_car_pv() -> None:
+    p = Params()
+    # 3 kW Einspeisung, Speicher lädt 2 kW bei 40 %: nur die Einspeisung zählt
+    assert ex.car_available_w(0, -3000, -2000, 40.0, p) == 3000
+    # ab 50 % zählt auch die Speicherladung
+    assert ex.car_available_w(0, -3000, -2000, 60.0, p) == 5000
+    # Auto lädt 3,5 kW, Speicher entlädt 1 kW ins Auto: nur 2,5 kW verfügbar
+    assert ex.car_available_w(3500, 0, 1000, 60.0, p) == 2500
+    assert ex.car_pv_setpoint(1.0, None, p) is None
+    assert ex.car_pv_setpoint(2.0, "one_phase", p) == ("one_phase", 8)  # abgerundet
+    assert ex.car_pv_setpoint(4.3, "one_phase", p) == ("one_phase", 16)  # unter 4,6 kW kein Wechsel
+    assert ex.car_pv_setpoint(4.3, "three_phases", p) == ("three_phases", 6)  # Hysterese
+    assert ex.car_pv_setpoint(7.0, "one_phase", p) == ("three_phases", 10)
+    assert ex.car_pv_setpoint(4.0, "three_phases", p) == ("one_phase", 16)
 
 
 async def test_executor_shadow_writes_nothing(hass: HomeAssistant) -> None:
@@ -325,6 +343,28 @@ async def test_executor_active_writes_battery_and_respects_device_switch(hass: H
     await hass.services.async_call("switch", "turn_off", {"entity_id": "switch.ems_mw4_automatik_speicher"}, blocking=True)
     await c.async_execute()
     assert len(calls) == 1  # Speicher-Automatik aus: kein weiterer Befehl
+
+
+async def test_wallbox_pv_follows_surplus(hass: HomeAssistant) -> None:
+    from datetime import timedelta
+    from homeassistant.util import dt as dt_util
+    _fill(hass)
+    entry = await _setup(hass)
+    c = entry.runtime_data
+    hass.states.async_set("select.go_echarger_216292_frc", "dont_charge")
+    hass.states.async_set("select.go_echarger_216292_psm", "one_phase")
+    hass.states.async_set("number.go_echarger_216292_amp", "6")
+    hass.states.async_set(c.entity_for("grid_power"), "-3000")
+    hass.states.async_set(c.entity_for("battery_power"), "0")
+    hass.states.async_set(c.entity_for("wallbox_power"), "0")
+    sel = async_mock_service(hass, "select", "select_option")
+    num = async_mock_service(hass, "number", "set_value")
+    assert (await c._async_wallbox({"frc": "pv"}))["grund"] == "PV-Laden: Mittelwert läuft an"
+    c._car_avail = [(dt_util.utcnow() - timedelta(seconds=280), 3000.0)]
+    done = await c._async_wallbox({"frc": "pv"})
+    assert done == {"amp": 13, "frc": "charge", "pv_kw": 3.0}
+    assert [x.data["option"] for x in sel] == ["charge"] and num[0].data["value"] == 13
+    assert (await c._async_wallbox({"frc": "pv"}))["grund"] == "PV-Laden: Haltezeit"
 
 
 async def test_setting_changes_params(hass: HomeAssistant) -> None:

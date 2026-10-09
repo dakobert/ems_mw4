@@ -135,6 +135,8 @@ class Params:
     car_cheap_quantile: float = 0.10
     car_now: bool = False  # einmalig: sofort mit voller Leistung bis zum Ladeziel laden
     car_kwh_per_100km: float = 20.0
+    car_pv_avg_s: float = 300.0  # PV-Laden: Mittel über 5 min
+    car_pv_hold_s: float = 300.0  # PV-Laden: höchstens alle 5 min ändern
     trip_buffer_min: float = 15.0
     trip_home_stay_min: float = 60.0  # Kette, wenn zwischen zwei Terminen weniger Zeit zu Hause bliebe
     allday_depart_h: float = 7.0  # ganztägige Termine: angenommene Abwesenheit

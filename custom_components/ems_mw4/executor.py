@@ -25,6 +25,33 @@ def car_setpoint(kw: float) -> tuple[str, int]:
     return "three_phases", max(6, min(16, round(kw * 1000 / (3 * 230))))
 
 
+def car_available_w(wallbox_w: float, grid_w: float, battery_w: float, battery_soc: float | None, p: Params) -> float:
+    """Leistung, die das Auto jetzt aus PV bekommen darf (W).
+
+    Netz: + Bezug, - Einspeisung. Speicher: + Entladen, - Laden. Entladen ins Auto zählt als Fehlbetrag.
+    Ladeleistung des Speichers steht dem Auto erst ab car_after_battery_soc zur Verfügung.
+    """
+    avail = wallbox_w - grid_w
+    if battery_w > 0:
+        avail -= battery_w
+    elif battery_soc is not None and battery_soc >= p.car_after_battery_soc:
+        avail -= battery_w
+    return avail
+
+
+def car_pv_setpoint(avail_kw: float, psm_now: str | None, p: Params) -> tuple[str, int] | None:
+    """Phasen und Strom für PV-Laden, abgerundet (kein Netzbezug). None = nicht laden.
+
+    Dreiphasig ab 4,6 kW, zurück auf einphasig erst unter 4,14 kW (6 A dreiphasig).
+    """
+    if avail_kw < p.car_min_kw:
+        return None
+    three_min = 3 * 230 * 6 / 1000.0
+    if avail_kw >= 4.6 or (psm_now == "three_phases" and avail_kw >= three_min):
+        return "three_phases", max(6, min(16, int(avail_kw * 1000 // (3 * 230))))
+    return "one_phase", max(6, min(16, int(avail_kw * 1000 // 230)))
+
+
 def decide(plan: dict[str, Any] | None, i: int | None, data: dict[str, Any], plan_age_s: float | None,
            max_age_s: float, p: Params) -> dict[str, Any]:
     """Soll-Befehle für den laufenden Slot. 'grund' erklärt, warum nichts geschrieben wird."""
@@ -68,10 +95,13 @@ def decide(plan: dict[str, Any] | None, i: int | None, data: dict[str, Any], pla
         out["heat"] = None
     # Wallbox
     if data.get("car_connected") == 1.0 and data.get("wallbox_power") is not None:
-        kw = plan["car_kw"][i]
+        kw = plan.get("car_grid_kw", plan["car_kw"])[i]
+        car_soc = data.get("car_soc")
         if kw >= p.car_min_kw:
             mode, amps = car_setpoint(kw)
-            out["car"] = {"frc": "charge", "psm": mode, "amp": amps}
+            out["car"] = {"frc": "charge", "psm": mode, "amp": amps, "kw": kw}
+        elif car_soc is None or car_soc < p.car_target_soc:
+            out["car"] = {"frc": "pv"}  # Leistung regelt der Coordinator nach dem echten Überschuss
         else:
             out["car"] = {"frc": "dont_charge"}
     return out
