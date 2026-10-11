@@ -158,8 +158,8 @@ def pv_dhw(data: dict[str, Any], latched_min: float | None, done_today: bool, p:
         if (temp is not None and temp >= p.dhw_hot_c) or latched_min >= p.dhw_pv_max_min:
             return False, True
         return True, False
-    if done_today or temp is None or temp >= p.dhw_hot_c:
-        return False, done_today
+    if done_today or temp is None or temp >= p.dhw_pv_start_below_c:
+        return False, done_today  # Speicher noch warm genug: die Stiebel würde wegen ihrer Hysterese nicht starten
     soc, grid = data.get("battery_soc"), data.get("grid_power")
     if soc is not None and grid is not None and soc >= p.dhw_pv_soc and -grid >= p.dhw_pv_export_w:
         return True, False

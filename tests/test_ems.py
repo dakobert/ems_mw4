@@ -480,6 +480,7 @@ def test_pv_dhw() -> None:
     assert ex.pv_dhw({**full, "grid_power": -500.0}, None, False, p) == (False, False)  # zu wenig Überschuss
     assert ex.pv_dhw({**full, "battery_soc": 80.0}, None, False, p) == (False, False)  # Speicher nicht voll
     assert ex.pv_dhw(full, None, True, p) == (False, True)  # heute schon erledigt
+    assert ex.pv_dhw({**full, "dhw_temp": 54.0}, None, False, p) == (False, False)  # noch warm: kein Start
     assert ex.pv_dhw({**full, "grid_power": 2500.0}, 10.0, False, p) == (True, False)  # läuft weiter trotz Bezug
     assert ex.pv_dhw({**full, "dhw_temp": 55.1}, 10.0, False, p) == (False, True)  # Ziel erreicht
     assert ex.pv_dhw(full, 46.0, False, p) == (False, True)  # Zeit abgelaufen

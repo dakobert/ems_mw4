@@ -120,6 +120,7 @@ class Params:
     dhw_charge_c: float = 57.0  # Sollwert während einer geplanten Ladung
     dhw_pv_soc: float = 95.0  # Warmwasser mit PV-Überschuss: Hausspeicher mindestens so voll
     dhw_pv_export_w: float = 1500.0  # und mindestens so viel Einspeisung
+    dhw_pv_start_below_c: float = 52.0  # Überschuss-Ladung nur starten, wenn der Speicher darunter liegt
     dhw_pv_max_min: float = 45.0  # längste Dauer einer Überschuss-Ladung
     dhw_hot_c: float = 55.0  # ab hier zählt eine Ladung als Hochladung (Legionellenschutz)
     dhw_max_min: float = 90.0  # begonnene Ladung läuft bis zur Schwelle, höchstens so lange
