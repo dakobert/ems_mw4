@@ -165,7 +165,9 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     @property
     def room_sensors(self) -> list[str]:
         chosen = list(self.config_entry.options.get(CONF_ROOM_SENSORS, DEFAULT_ROOM_SENSORS))
-        return list(DEFAULT_ROOM_SENSORS) if sorted(chosen) == sorted(LEGACY_ROOM_SENSORS) else chosen
+        if any(sorted(chosen) == sorted(old) for old in LEGACY_ROOM_SENSORS):
+            return list(DEFAULT_ROOM_SENSORS)
+        return chosen
 
     async def async_load(self) -> None:
         """Gespeicherte Messreihe laden."""
@@ -203,7 +205,9 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     def _room_temperature(self, now: datetime) -> tuple[float | None, int]:
         values: list[float] = []
-        for entity_id in self.room_sensors:
+        lead: float | None = None
+        sensors = self.room_sensors
+        for entity_id in sensors:
             state = self.hass.states.get(entity_id)
             if state is None:
                 continue
@@ -220,13 +224,11 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             elif (now - seen[1]).total_seconds() > ROOM_FROZEN_S:
                 continue
             values.append(value)
+            if entity_id == sensors[0]:
+                lead = value
         if not values:
             return None, 0
-        # Der kühle Raum zählt, nicht der Durchschnitt: sonst friert man im Wohnzimmer, während das
-        # Mittel noch passt. Ab vier Fühlern der zweitkälteste, damit ein einzelner Ausreißer
-        # (Lüften, offene Haustür) nicht die Heizung treibt.
-        values.sort()
-        return round(values[1] if len(values) >= 4 else values[0], 2), len(values)
+        return th.room_reference(values, lead, self.params.room_target_c - 0.5), len(values)
 
     async def _async_update_data(self) -> dict[str, Any]:
         now = dt_util.utcnow()

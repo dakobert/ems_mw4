@@ -206,3 +206,18 @@ def last_dhw_hot(samples: list[dict[str, Any]], threshold: float) -> datetime | 
             except (KeyError, ValueError):
                 continue
     return None
+
+
+def room_reference(values: list[float], lead: float | None, lead_min_c: float) -> float | None:
+    """Raumreferenz: Median der Führungsräume. Ausreißer (Kochen, Lüften) fallen heraus.
+
+    Liegt der Führungsraum (Wohnzimmer) unter lead_min_c, zählt er allein.
+    """
+    if not values:
+        return None
+    if lead is not None and lead < lead_min_c:
+        return round(lead, 2)
+    v = sorted(values)
+    n = len(v)
+    mid = v[n // 2] if n % 2 else (v[n // 2 - 1] + v[n // 2]) / 2
+    return round(mid, 2)

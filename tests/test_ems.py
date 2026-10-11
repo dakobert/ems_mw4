@@ -54,9 +54,9 @@ async def test_values_and_median(hass: HomeAssistant) -> None:
     assert data["pv_power"] == 2.0
     assert data["hp_power"] == 2000.0  # kW -> W
     assert data["compressor"] == 1.0
-    assert data["room_temp"] == 21.0  # zweitkältester aus 20..24
+    assert data["room_temp"] == 20.0  # Wohnzimmer (20) unter 20,5: zählt allein
     assert data["sources_ok"] == len(SOURCES) + 1
-    assert hass.states.get("sensor.ems_mw4_raumtemperatur_referenz").state == "21.0"
+    assert hass.states.get("sensor.ems_mw4_raumtemperatur_referenz").state == "20.0"
     assert hass.states.get("sensor.ems_mw4_pv_leistung").state == "2.0"
 
 
@@ -78,7 +78,7 @@ async def test_room_stale_and_empty(hass: HomeAssistant) -> None:
     future = dt_util.utcnow() + timedelta(hours=4)
     hass.states.async_set(DEFAULT_ROOM_SENSORS[0], "30")  # frisch gemeldet
     value, used = c._room_temperature(dt_util.utcnow())
-    assert used == 5
+    assert used == 4
     value, used = c._room_temperature(future)
     assert (value, used) == (None, 0)
 
@@ -113,7 +113,7 @@ async def test_sample_store_and_reload(hass: HomeAssistant, hass_storage) -> Non
     assert c.data["samples"] == 1
     assert await hass.config_entries.async_unload(entry.entry_id)
     await hass.async_block_till_done()
-    assert hass_storage["ems_mw4.messreihe"]["data"]["samples"][0]["room_temp"] == 21.0
+    assert hass_storage["ems_mw4.messreihe"]["data"]["samples"][0]["room_temp"] == 20.0
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
     assert len(entry.runtime_data.samples) == 1
@@ -492,12 +492,22 @@ async def test_room_frozen_sensor_dropped(hass: HomeAssistant) -> None:
     c = entry.runtime_data
     now = dt_util.utcnow()
     _, used = c._room_temperature(now)
-    assert used == 5
+    assert used == 4
     # erster Fühler: seit fünf Stunden derselbe Wert, obwohl der Zeitstempel frisch ist (Neustart)
     first = DEFAULT_ROOM_SENSORS[0]
     c._room_seen[first] = (c._room_seen[first][0], now - timedelta(hours=5))
     _, used = c._room_temperature(now)
-    assert used == 4
+    assert used == 3
     hass.states.async_set(first, "25.5")  # meldet sich wieder mit neuem Wert
     _, used = c._room_temperature(now)
-    assert used == 5
+    assert used == 4
+
+
+def test_room_reference() -> None:
+    from custom_components.ems_mw4.thermal import room_reference
+    assert room_reference([21.0, 21.1, 22.0, 22.2], 21.0, 20.5) == 21.55  # Median der vier
+    assert room_reference([21.0, 21.1, 22.0, 25.0], 21.0, 20.5) == 21.55  # Küche beim Kochen fällt heraus
+    assert room_reference([20.3, 21.1, 22.0, 22.2], 20.3, 20.5) == 20.3  # Wohnzimmer zu kalt: zählt allein
+    assert room_reference([21.0, 21.4], None, 20.5) == 21.2
+    assert room_reference([21.0, 21.4, 22.0], 21.0, 20.5) == 21.4
+    assert room_reference([], None, 20.5) is None
