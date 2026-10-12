@@ -15,6 +15,8 @@ from homeassistant.util import dt as dt_util
 
 from . import data as ems_data
 from . import forecast as fc
+from dataclasses import replace
+
 from .const import (  # noqa: I001
     CONF_WEATHER,
     COST_STORE_KEY,
@@ -427,12 +429,17 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         except Exception:  # noqa: BLE001 - Kalender oder Fahrzeit dürfen den Plan nie verhindern
             _LOGGER.exception("Fahrten konnten nicht gelesen werden")
             trips, self.trip_status = [], "Fehler beim Lesen"
+        self.sunny = th.sunny_tomorrow(
+            slots, pv, [b + h for b, h in zip(base, heat)], (now + timedelta(days=1)).date(), self.params.battery_kwh)
         plan = await self.hass.async_add_executor_job(
             build_plan, slots, prices, estimated, pv, base, heat, soc, self.data.get("dhw_temp"),
-            self.data.get("car_connected") == 1.0, self.data.get("car_soc"), history, await self._dhw_params(now),
+            self.data.get("car_connected") == 1.0, self.data.get("car_soc"), history,
+            self._car_params(await self._dhw_params(now)),
             temps, self.data.get(KEY_ROOM_TEMP), self.quiet_slots(slots), trips,
         )
         plan["temp_c"] = temps
+        if isinstance(plan.get("car"), dict):
+            plan["car"]["ab_speicher_soc"] = self._car_params(self.params).car_after_battery_soc
         daily = await ems_data.async_fetch_daily_means(self.hass, weather)
         self._update_proactive(temps, th.coldest_day(daily, now.date(), self.params.heat_days_ahead))
         self.plan, self.plan_time = plan, now
@@ -729,7 +736,7 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     async def _async_execute(self) -> None:
         age = (dt_util.now() - self.plan_time).total_seconds() if self.plan_time else None
-        intent = ex.decide(self.plan, self.plan_index(), self.data or {}, age, PLAN_MAX_AGE_S, self.params)
+        intent = ex.decide(self.plan, self.plan_index(), self.data or {}, age, PLAN_MAX_AGE_S, self._car_params(self.params))
         self.intent = intent
         written: dict[str, Any] = {}
         self._reset_quiet_when_over()
@@ -857,9 +864,16 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         except ValueError:
             return None
 
+    def _car_params(self, p: Params) -> Params:
+        """Speicher-Vorrang vor dem Auto: im Winter bis 95 %, bei sonnigem Ausblick (Sommer) bis 50 % und
+        dann darf der Speicher auch ins Auto entladen – er füllt sich am nächsten Tag wieder."""
+        if getattr(self, "sunny", False):
+            return replace(p, car_after_battery_soc=p.car_after_battery_soc_sunny, car_battery_to_car=True)
+        return p
+
     def _car_pv_want(self, psm: str | None, frc: str) -> dict[str, Any]:
         """PV-Laden: Mittel der verfügbaren Leistung über car_pv_avg_s, Änderung höchstens alle car_pv_hold_s."""
-        p, now = self.params, dt_util.utcnow()
+        p, now = self._car_params(self.params), dt_util.utcnow()
         wb, grid, batt = (self._state_float(k) for k in ("wallbox_power", "grid_power", "battery_power"))
         if wb is None or grid is None or batt is None:
             return {"grund": "PV-Laden: Messwerte fehlen"}

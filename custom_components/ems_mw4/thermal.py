@@ -221,3 +221,10 @@ def room_reference(values: list[float], lead: float | None, lead_min_c: float) -
     n = len(v)
     mid = v[n // 2] if n % 2 else (v[n // 2 - 1] + v[n // 2]) / 2
     return round(mid, 2)
+
+
+def sunny_tomorrow(slots: list, pv_kw: list[float], load_kw: list[float], tomorrow, battery_kwh: float) -> bool:
+    """Morgen bleibt nach der Hauslast mindestens ein voller Speicher PV übrig (Sommer, kaum Heizung)."""
+    pv = sum(v for s, v in zip(slots, pv_kw) if s.date() == tomorrow) * 0.25
+    load = sum(v for s, v in zip(slots, load_kw) if s.date() == tomorrow) * 0.25
+    return pv > 0 and pv - load >= battery_kwh

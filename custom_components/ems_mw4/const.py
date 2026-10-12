@@ -143,6 +143,8 @@ class Params:
     car_reserve_soc: float = 20.0
     pv_safety: float = 0.7  # Abschlag auf die PV-Prognose bei Auto-Entscheidungen
     car_after_battery_soc: float = 95.0  # PV-Überschuss: erst Speicher bis hier, dann Auto (Roy 12.10.: Speicher vorrangig)
+    car_after_battery_soc_sunny: float = 50.0  # wenn morgen viel PV-Überschuss erwartet wird (Sommer): Speicher nur bis hier vorrangig
+    car_battery_to_car: bool = False  # vom Coordinator gesetzt: Speicher darf ins Auto entladen (bis zur Schwelle)
     car_cheap_quantile: float = 0.10
     car_now: bool = False  # einmalig: sofort mit voller Leistung bis zum Ladeziel laden
     car_kwh_per_100km: float = 20.0

@@ -297,6 +297,11 @@ def test_car_pv() -> None:
     # erst ab 95 % zählt auch die Speicherladung (Speicher vorrangig)
     assert ex.car_available_w(0, -3000, -2000, 60.0, p) == 3000
     assert ex.car_available_w(0, -3000, -2000, 96.0, p) == 5000
+    # Sommer (sonniger Ausblick): Speicher darf oberhalb der Schwelle ins Auto entladen
+    from dataclasses import replace as _r
+    summer = _r(p, car_after_battery_soc=50.0, car_battery_to_car=True)
+    assert ex.car_available_w(3500, 0, 1000, 60.0, summer) == 3500
+    assert ex.car_available_w(3500, 0, 1000, 40.0, summer) == 2500  # unter der Schwelle nicht
     # Auto lädt 3,5 kW, Speicher entlädt 1 kW ins Auto: nur 2,5 kW verfügbar
     assert ex.car_available_w(3500, 0, 1000, 60.0, p) == 2500
     assert ex.car_pv_setpoint(1.0, None, p) is None
@@ -512,3 +517,14 @@ def test_room_reference() -> None:
     assert room_reference([21.0, 21.4], None, 20.5) == 21.2
     assert room_reference([21.0, 21.4, 22.0], 21.0, 20.5) == 21.4
     assert room_reference([], None, 20.5) is None
+
+
+def test_sunny_tomorrow() -> None:
+    from datetime import datetime as _dt, timedelta as _td
+    from custom_components.ems_mw4.thermal import sunny_tomorrow
+    start = _dt(2026, 6, 1)
+    slots = [start + _td(minutes=15 * i) for i in range(192)]
+    tomorrow = (start + _td(days=1)).date()
+    pv = [8.0 if 10 <= s.hour < 16 and s.date() == tomorrow else 0.0 for s in slots]  # 48 kWh
+    assert sunny_tomorrow(slots, pv, [0.5] * 192, tomorrow, 12.5) is True  # 48 - 12 = 36 kWh übrig
+    assert sunny_tomorrow(slots, [v / 4 for v in pv], [0.5] * 192, tomorrow, 12.5) is False  # 12 - 12

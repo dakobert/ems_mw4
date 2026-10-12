@@ -31,10 +31,12 @@ def car_available_w(wallbox_w: float, grid_w: float, battery_w: float, battery_s
     Netz: + Bezug, - Einspeisung. Speicher: + Entladen, - Laden. Entladen ins Auto zählt als Fehlbetrag.
     Ladeleistung des Speichers steht dem Auto erst ab car_after_battery_soc zur Verfügung.
     """
+    above = battery_soc is not None and battery_soc >= p.car_after_battery_soc
     avail = wallbox_w - grid_w
     if battery_w > 0:
-        avail -= battery_w
-    elif battery_soc is not None and battery_soc >= p.car_after_battery_soc:
+        if not (p.car_battery_to_car and above):  # nur bei sonnigem Ausblick darf der Speicher ins Auto
+            avail -= battery_w
+    elif above:
         avail -= battery_w
     return avail
 
