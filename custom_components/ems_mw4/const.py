@@ -142,7 +142,7 @@ class Params:
     car_target_soc: float = 100.0
     car_reserve_soc: float = 20.0
     pv_safety: float = 0.7  # Abschlag auf die PV-Prognose bei Auto-Entscheidungen
-    car_after_battery_soc: float = 50.0  # PV-Überschuss: erst Speicher bis hier, dann Auto
+    car_after_battery_soc: float = 95.0  # PV-Überschuss: erst Speicher bis hier, dann Auto (Roy 12.10.: Speicher vorrangig)
     car_cheap_quantile: float = 0.10
     car_now: bool = False  # einmalig: sofort mit voller Leistung bis zum Ladeziel laden
     car_kwh_per_100km: float = 20.0
@@ -242,6 +242,7 @@ SETTINGS: tuple[Setting, ...] = (
     Setting("battery_wear_ct", "Speicher Verschleißansatz", 0, 10, 0.5, "ct/kWh", "mdi:battery-heart-variant"),
     Setting("feed_in_ct", "Einspeisevergütung", 0, 20, 0.1, "ct/kWh", "mdi:transmission-tower-export"),
     Setting("car_target_soc", "Auto Ladeziel", 50, 100, 5, "%", "mdi:car-electric"),
+    Setting("car_after_battery_soc", "Auto-PV-Laden erst ab Speicher", 50, 100, 5, "%", "mdi:home-battery"),
     Setting("car_reserve_soc", "Auto Grundreserve", 0, 50, 5, "%", "mdi:car-battery"),
     Setting("car_cheap_below_mean_ct", "Auto sehr günstig: Abstand zum Mittel", 0, 20, 0.5, "ct/kWh", "mdi:cash-minus"),
     Setting("car_kwh_per_100km", "Auto Verbrauch", 12, 30, 0.5, "kWh/100 km", "mdi:speedometer"),

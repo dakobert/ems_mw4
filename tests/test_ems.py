@@ -294,8 +294,9 @@ def test_car_pv() -> None:
     p = Params()
     # 3 kW Einspeisung, Speicher lädt 2 kW bei 40 %: nur die Einspeisung zählt
     assert ex.car_available_w(0, -3000, -2000, 40.0, p) == 3000
-    # ab 50 % zählt auch die Speicherladung
-    assert ex.car_available_w(0, -3000, -2000, 60.0, p) == 5000
+    # erst ab 95 % zählt auch die Speicherladung (Speicher vorrangig)
+    assert ex.car_available_w(0, -3000, -2000, 60.0, p) == 3000
+    assert ex.car_available_w(0, -3000, -2000, 96.0, p) == 5000
     # Auto lädt 3,5 kW, Speicher entlädt 1 kW ins Auto: nur 2,5 kW verfügbar
     assert ex.car_available_w(3500, 0, 1000, 60.0, p) == 2500
     assert ex.car_pv_setpoint(1.0, None, p) is None

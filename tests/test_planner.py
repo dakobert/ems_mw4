@@ -8,6 +8,8 @@ from custom_components.ems_mw4 import forecast as fc
 from custom_components.ems_mw4.planner import build_plan, plan_battery, plan_car_grid, plan_dhw
 
 P = Params()
+from dataclasses import replace as _replace  # noqa: E402
+P50 = _replace(P, car_after_battery_soc=50.0)  # alte Vorgabe: Auto ab 50 % Speicher
 T0 = datetime(2026, 10, 5, 0, 0, tzinfo=timezone.utc)
 SLOTS = fc.build_slots(T0)
 N = len(SLOTS)
@@ -161,17 +163,26 @@ def test_battery_charges_pv_early_on_tie():
 def test_car_pv_only_after_battery_half_full():
     prices = [40.0] * N  # flach: kein Netzladen des Autos
     pv = [6.0 if 9 <= s.hour < 16 else 0.0 for s in SLOTS]
-    plan = build_plan(SLOTS, prices, [False] * N, pv, [0.4] * N, [0.0] * N, 10.0, 55.0, True, 60.0, prices, P)
+    plan = build_plan(SLOTS, prices, [False] * N, pv, [0.4] * N, [0.0] * N, 10.0, 55.0, True, 60.0, prices, P50)
     first_car = next(i for i, v in enumerate(plan["car_kw"]) if v > 0)
-    assert plan["soc"][first_car - 1] >= P.car_after_battery_soc - 1.0  # Speicher zuerst bis 50 %
+    assert plan["soc"][first_car - 1] >= P50.car_after_battery_soc - 1.0  # Speicher zuerst bis 50 %
     assert plan["battery_kw"][36] < -1.0  # 9 Uhr: Speicher lädt, Auto noch nicht
     assert plan["car_kw"][36] == 0
     for i in range(N):
         if plan["car_kw"][i] > 0:
             assert plan["grid_kw"][i] <= 0.1  # Auto zieht keinen Netzstrom
     # Speicher schon über 50 %: Auto bekommt den Überschuss sofort
-    plan = build_plan(SLOTS, prices, [False] * N, pv, [0.4] * N, [0.0] * N, 70.0, 55.0, True, 60.0, prices, P)
+    plan = build_plan(SLOTS, prices, [False] * N, pv, [0.4] * N, [0.0] * N, 70.0, 55.0, True, 60.0, prices, P50)
     assert plan["car_kw"][36] > 0
+
+
+def test_car_pv_waits_for_full_battery():
+    prices = [40.0] * N
+    pv = [6.0 if 9 <= s.hour < 16 else 0.0 for s in SLOTS]
+    plan = build_plan(SLOTS, prices, [False] * N, pv, [0.4] * N, [0.0] * N, 70.0, 55.0, True, 60.0, prices, P)
+    assert plan["car_kw"][36] == 0  # Vorgabe 95 %: Speicher bei 70 % geht vor
+    first_car = next((i for i, v in enumerate(plan["car_kw"]) if v > 0), None)
+    assert first_car is None or plan["soc"][first_car - 1] >= 90.0  # Speicher praktisch voll
 
 
 def test_car_no_grid_charging_when_pv_covers():
@@ -446,7 +457,7 @@ def test_car_refills_trip_consumption_after_return():
             "abfahrt": SLOTS[44], "rueckkehr": SLOTS[52], "dep_index": 44, "back_index": 53}
     flat = [40.0] * N
     pv = [6.0 if 9 <= s.hour < 16 else 0.0 for s in SLOTS]
-    plan = build_plan(SLOTS, flat, [False] * N, pv, [0.4] * N, [0.0] * N, 70.0, 55.0, True, 90.0, flat, P, trips=[trip])
+    plan = build_plan(SLOTS, flat, [False] * N, pv, [0.4] * N, [0.0] * N, 70.0, 55.0, True, 90.0, flat, P50, trips=[trip])
     car = plan["car_kw"]
     assert plan["car"]["bedarf_kwh"] == 16.5 and plan["car"]["fahrten_kwh"] == 10.0
     assert abs(sum(car[:44]) * SLOT_H - 6.47) < 0.01  # vor der Abfahrt nur bis zum Ladeziel
