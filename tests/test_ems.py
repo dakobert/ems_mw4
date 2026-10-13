@@ -528,3 +528,16 @@ def test_sunny_tomorrow() -> None:
     pv = [8.0 if 10 <= s.hour < 16 and s.date() == tomorrow else 0.0 for s in slots]  # 48 kWh
     assert sunny_tomorrow(slots, pv, [0.5] * 192, tomorrow, 12.5) is True  # 48 - 12 = 36 kWh übrig
     assert sunny_tomorrow(slots, [v / 4 for v in pv], [0.5] * 192, tomorrow, 12.5) is False  # 12 - 12
+
+
+async def test_watch_ignores_forecast_gaps(hass: HomeAssistant) -> None:
+    _fill(hass)
+    entry = await _setup(hass)
+    c = entry.runtime_data
+    c.plan_status = "ok"
+    c.missing = ["pv_fc_day_after", "car_soc"]
+    await c._async_watch()
+    assert c._trouble_since is None  # Prognose und Auto-Daten: keine Störung
+    c.missing = ["battery_soc"]
+    await c._async_watch()
+    assert c._trouble_since is not None

@@ -17,6 +17,9 @@ from . import data as ems_data
 from . import forecast as fc
 from dataclasses import replace
 
+# Ohne diese Werte steuert das EMS falsch; nur ihr Fehlen löst eine Push-Meldung aus
+PUSH_KEYS = ("grid_power", "battery_soc", "battery_power", "dhw_temp", "wallbox_power", "price")
+
 from .const import (  # noqa: I001
     CONF_WEATHER,
     COST_STORE_KEY,
@@ -973,23 +976,28 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 self._block_store.async_delay_save(lambda: {"log": self.block_log}, 30)
 
     async def _async_watch(self) -> None:
-        """Bei aktiver Steuerung: Push, wenn Messwerte oder Plan länger als 10 Minuten fehlen."""
+        """Bei aktiver Steuerung: Push, wenn steuerungswichtige Messwerte oder der Plan länger als 30 Minuten fehlen.
+
+        Prognosen (PV übermorgen usw.), Auto-Daten und Anzeigewerte lösen keine Meldung aus: Sie fehlen
+        regelmäßig kurz (Tageswechsel, BMW-Cloud) und der Plan kommt ohne sie aus.
+        """
         now = dt_util.utcnow()
-        trouble = bool(self.missing) or not self.plan_status.startswith("ok")
+        critical = [k for k in self.missing if k in PUSH_KEYS]
+        trouble = bool(critical) or not self.plan_status.startswith("ok")
         if not trouble:
             self._trouble_since = None
             return
         if self._trouble_since is None:
             self._trouble_since = now
             return
-        if (now - self._trouble_since).total_seconds() < 600:
+        if (now - self._trouble_since).total_seconds() < 1800:
             return
         if self._last_push is not None and (now - self._last_push).total_seconds() < 3600:
             return
         if not self.hass.services.has_service("notify", NOTIFY_SERVICE):
             return
         self._last_push = now
-        text = f"Plan: {self.plan_status}. Fehlende Messwerte: {', '.join(self.missing) or 'keine'}."
+        text = f"Plan: {self.plan_status}. Fehlende Messwerte: {', '.join(critical) or 'keine'}."
         await self.hass.services.async_call(
             "notify", NOTIFY_SERVICE, {"title": "EMS MW4: Störung", "message": text}, blocking=False
         )
