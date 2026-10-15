@@ -428,7 +428,7 @@ def test_trip_chain_allday_multiday_overnight():
     multi = tr.build_trips(tr.parse_events([ev("2026-10-05T10:00:00+02:00", "2026-10-06T15:00:00+02:00", "A", a)], now), routes, P)
     assert len(multi) == 2 and multi[0]["abfahrt"] == datetime(2026, 10, 5, 9, 5, tzinfo=tz)
     assert multi[0]["rueckkehr"].hour == 17 and multi[1]["abfahrt"].hour == 7
-    assert multi[1]["rueckkehr"] == datetime(2026, 10, 6, 15, 40, tzinfo=tz)
+    assert multi[1]["rueckkehr"] == datetime(2026, 10, 6, 16, 12, tzinfo=tz)  # 15:00 + 20 min + 40 min x 1,3
     # Übernachtung: eine Fahrt, durchgehend abwesend
     night = tr.build_trips(tr.parse_events([ev("2026-10-05", "2026-10-08", "A", a, "Hotel #Übernachtung")], now), routes, P)
     assert len(night) == 1 and night[0]["km"] == 100.0
