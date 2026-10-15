@@ -407,7 +407,7 @@ def test_trip_chain_allday_multiday_overnight():
     hop = tr._hop_km(a, b)
     assert 14 < hop < 15 and abs(chain[0]["km"] - (50 + hop + 60)) < 0.1
     assert chain[0]["abfahrt"] == datetime(2026, 10, 5, 8, 5, tzinfo=tz)
-    assert chain[0]["rueckkehr"] == datetime(2026, 10, 5, 14, 50, tzinfo=tz)
+    assert chain[0]["rueckkehr"] == datetime(2026, 10, 5, 15, 25, tzinfo=tz)  # Ende 14:00 + 20 min + 50 min x 1,3
     # weit entfernt, 3 h Pause: Heimfahrt lohnt nicht -> Kette
     far = {"A": {"km": 100.0, "min": 70.0, "t": ""}, "B": {"km": 120.0, "min": 80.0, "t": ""}}
     long_gap = [

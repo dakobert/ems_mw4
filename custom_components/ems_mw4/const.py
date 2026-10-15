@@ -151,6 +151,8 @@ class Params:
     car_pv_avg_s: float = 300.0  # PV-Laden: Mittel über 5 min
     car_pv_hold_s: float = 300.0  # PV-Laden: höchstens alle 5 min ändern
     trip_buffer_min: float = 15.0
+    trip_return_buffer_min: float = 20.0  # Nachlauf nach Terminende bis zur Abfahrt nach Hause
+    trip_return_traffic: float = 1.3  # Heimfahrt dauert im Feierabendverkehr länger
     trip_home_stay_min: float = 60.0  # Kette, wenn zwischen zwei Terminen weniger Zeit zu Hause bliebe
     allday_depart_h: float = 7.0  # ganztägige Termine: angenommene Abwesenheit
     allday_back_h: float = 17.0
@@ -249,6 +251,7 @@ SETTINGS: tuple[Setting, ...] = (
     Setting("car_cheap_below_mean_ct", "Auto sehr günstig: Abstand zum Mittel", 0, 20, 0.5, "ct/kWh", "mdi:cash-minus"),
     Setting("car_kwh_per_100km", "Auto Verbrauch", 12, 30, 0.5, "kWh/100 km", "mdi:speedometer"),
     Setting("trip_buffer_min", "Fahrt: Puffer vor Abfahrt", 0, 60, 5, "min", "mdi:clock-start"),
+    Setting("trip_return_buffer_min", "Fahrt: Puffer nach Terminende", 0, 90, 5, "min", "mdi:clock-end"),
     Setting("dhw_kwh", "Warmwasser Energie je Ladung", 0.5, 4, 0.1, "kWh", "mdi:water-boiler"),
     Setting("dhw_skip_above_c", "Warmwasser: heute keine Ladung ab", 38, 60, 1, "°C", "mdi:thermometer-water"),
     Setting("heat_limit_c", "Heizgrenze", 10, 20, 0.5, "°C", "mdi:thermometer-lines"),

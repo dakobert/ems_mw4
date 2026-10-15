@@ -110,7 +110,9 @@ def build_trips(visits: list[dict[str, Any]], routes: dict[str, dict[str, Any]],
             "min_rueck": route["min"],
             "km": round(2 * route["km"], 1),
             "abfahrt": visit["depart_fixed"] or visit["start"] - travel - timedelta(minutes=p.trip_buffer_min),
-            "rueckkehr": visit["back_fixed"] or visit["end"] + travel,
+            # Rückkehr: Ende + Nachlauf am Termin + Heimfahrt mit Verkehrszuschlag (Feierabendverkehr, Roy 15.10.)
+            "rueckkehr": visit["back_fixed"] or (
+                visit["end"] + timedelta(minutes=p.trip_return_buffer_min) + travel * p.trip_return_traffic),
         })
     legs.sort(key=lambda t: t["abfahrt"])
     out: list[dict[str, Any]] = []
