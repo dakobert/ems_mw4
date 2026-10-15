@@ -541,3 +541,27 @@ async def test_watch_ignores_forecast_gaps(hass: HomeAssistant) -> None:
     c.missing = ["battery_soc"]
     await c._async_watch()
     assert c._trouble_since is not None
+
+
+async def test_charge_reminder_only_in_evening(hass: HomeAssistant) -> None:
+    from datetime import datetime as _dt, timedelta as _td
+    from homeassistant.util import dt as dt_util
+    _fill(hass)
+    entry = await _setup(hass)
+    c = entry.runtime_data
+    calls = async_mock_service(hass, "notify", "mobile_app_iphone_von_roy")
+    tz = dt_util.get_default_time_zone()
+    morning = _dt(2026, 10, 15, 7, 30, tzinfo=tz)
+    trip = {"abfahrt": (morning + _td(hours=26)).isoformat(), "rueckkehr": (morning + _td(hours=34)).isoformat(),
+            "fehlt_kwh": 15.0}
+    c.plan = {"trips": [trip]}
+    c.data["car_connected"] = 0.0
+    with patch("custom_components.ems_mw4.coordinator.dt_util.now", return_value=morning):
+        await c._async_reminder()
+    assert calls == []  # morgens keine Erinnerung
+    evening = morning.replace(hour=19)
+    with patch("custom_components.ems_mw4.coordinator.dt_util.now", return_value=evening):
+        await c._async_reminder()
+        await c._async_reminder()
+    await hass.async_block_till_done()
+    assert len(calls) == 1 and "15.0 kWh" in calls[0].data["message"]

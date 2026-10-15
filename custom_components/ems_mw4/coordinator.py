@@ -18,6 +18,7 @@ from . import forecast as fc
 from dataclasses import replace
 
 # Ohne diese Werte steuert das EMS falsch; nur ihr Fehlen löst eine Push-Meldung aus
+REMIND_FROM_MIN, REMIND_UNTIL_MIN = 18 * 60, 22 * 60 + 30  # Erinnerung ans Anstecken: abends
 PUSH_KEYS = ("grid_power", "battery_soc", "battery_power", "dhw_temp", "wallbox_power", "price")
 
 from .const import (  # noqa: I001
@@ -571,46 +572,51 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return None
         return {"km": round(km, 1), "min": round(minutes, 1), "t": now.isoformat()}
 
-    def charge_needed_kwh(self) -> float:
-        """Was dem Auto für geplante Fahrten oder die Grundreserve fehlt, solange es nicht lädt."""
-        need = sum((t.get("fehlt_kwh") or 0.0) for t in (self.plan or {}).get("trips", []))
+    def charge_needed_kwh(self, until: datetime | None = None) -> float:
+        """Was dem Auto für geplante Fahrten (bis `until`) oder die Grundreserve fehlt, solange es nicht lädt."""
+        need = 0.0
+        for t in (self.plan or {}).get("trips", []):
+            if until is not None and datetime.fromisoformat(t["abfahrt"]) > until:
+                continue
+            need += t.get("fehlt_kwh") or 0.0
         soc = (self.data or {}).get("car_soc")
         if soc is not None and soc < self.params.car_reserve_soc:
             need = max(need, (self.params.car_reserve_soc - soc) / 100.0 * self.params.car_kwh)
         return round(need, 1)
 
     async def _async_reminder(self) -> None:
-        """Erinnerung ans Anstecken: frühestens 30 Minuten nach Ankunft, nicht zwischen 22 und 7 Uhr.
+        """Erinnerung ans Anstecken am Abend, damit nachts günstig geladen werden kann (Roy 15.10.).
 
-        Ankunft = der Kilometerstand hat sich geändert. Während einer geplanten Abwesenheit wird nicht erinnert.
+        Nur zwischen REMIND_FROM und REMIND_UNTIL Uhr, höchstens einmal am Abend (plus „in 1 Stunde erneut").
+        Gerechnet wird mit den Fahrten bis zum nächsten Abend. Morgens wird nicht mehr erinnert.
         """
         now = dt_util.now()
         data = self.data or {}
-        mileage = data.get("car_mileage")
-        if mileage is not None:
-            if self._last_mileage is not None and mileage > self._last_mileage:
-                self._arrival, self._snooze_until = now, None
-            self._last_mileage = mileage
-        if self._arrival is None or data.get("car_connected") != 0.0:
+        if data.get("car_connected") != 0.0 or self._muted_day == now.date():
             return
-        if now.hour >= 22 or now.hour < 7 or self._muted_day == now.date():
+        minutes = now.hour * 60 + now.minute
+        if not REMIND_FROM_MIN <= minutes < REMIND_UNTIL_MIN:
             return
         if any(
             datetime.fromisoformat(t["abfahrt"]) <= now <= datetime.fromisoformat(t["rueckkehr"])
             for t in (self.plan or {}).get("trips", [])
         ):
+            return  # unterwegs
+        if self._snooze_until is not None:
+            if now < self._snooze_until:
+                return
+        elif self._reminder_sent_for == now.date():
             return
-        due = self._snooze_until if self._snooze_until is not None else self._arrival + timedelta(minutes=30)
-        if now < due or (self._snooze_until is None and self._reminder_sent_for == self._arrival):
-            return
-        need = self.charge_needed_kwh()
+        until = (now + timedelta(days=1)).replace(hour=23, minute=59)
+        need = self.charge_needed_kwh(until)
         if need <= 0:
             return
-        self._reminder_sent_for, self._snooze_until = self._arrival, None
+        self._reminder_sent_for, self._snooze_until = now.date(), None
         if self.hass.services.has_service("notify", NOTIFY_SERVICE):
             await self.hass.services.async_call("notify", NOTIFY_SERVICE, {
-                "title": "EMS MW4: Auto anstecken",
-                "message": f"Es fehlen {need} kWh für die nächsten Fahrten. Das Auto ist nicht angesteckt.",
+                "title": "EMS MW4: Auto heute Abend anstecken",
+                "message": f"Für die Fahrten bis morgen Abend fehlen {need} kWh. "
+                           "Angesteckt lädt das Auto über Nacht zu den günstigsten Zeiten.",
                 "data": {"actions": [
                     {"action": ACTION_SNOOZE, "title": "In 1 Stunde erneut"},
                     {"action": ACTION_SKIP, "title": "Heute nicht"},
