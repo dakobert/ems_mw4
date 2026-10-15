@@ -152,12 +152,13 @@ def plan_car_trips(
     for trip in sorted(trips, key=lambda t: t["dep_index"]):
         dep, back = trip["dep_index"], trip["back_index"]
         entry = {k: trip[k] for k in ("summary", "address", "km", "fahrzeit_min", "kwh")}
+        entry["folge_kwh"] = trip.get("folge_kwh", 0.0)
         entry["kette"] = bool(trip.get("kette"))
         entry.update({"abfahrt": trip["abfahrt"].isoformat(), "rueckkehr": trip["rueckkehr"].isoformat()})
         if soc is None:
             entry["fehlt_kwh"] = None
         else:
-            need = min(p.car_kwh, trip["kwh"] + reserve)
+            need = min(p.car_kwh, trip["kwh"] + trip.get("folge_kwh", 0.0) + reserve)
             deficit = need - (soc / 100.0 * p.car_kwh + sum(out[:dep]) * SLOT_H - used)
             if connected:
                 for i in sorted((i for i in range(dep) if not away[i]), key=lambda i: prices[i]):

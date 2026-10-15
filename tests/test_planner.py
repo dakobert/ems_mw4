@@ -563,3 +563,19 @@ def test_dhw_weekly_hot_charge():
                {"t": "2026-10-03T10:00:00+00:00", "dhw_temp": None}]
     assert th.last_dhw_hot(samples, 55.0).isoformat() == "2026-10-01T10:00:00+00:00"
     assert th.last_dhw_hot(samples, 60.0) is None
+
+
+def test_car_trips_follow_day_buffer():
+    from custom_components.ems_mw4.planner import plan_car_trips
+    flat = [40.0] * N
+    base = {"summary": "A", "address": "x", "km": 97.0, "fahrzeit_min": 41, "kette": False}
+    t1 = {**base, "kwh": 18.0, "folge_kwh": 18.0, "abfahrt": SLOTS[40], "rueckkehr": SLOTS[64],
+          "dep_index": 40, "back_index": 65}
+    t2 = {**base, "kwh": 18.0, "folge_kwh": 0.0, "abfahrt": SLOTS[136], "rueckkehr": SLOTS[160],
+          "dep_index": 136, "back_index": 161}
+    out, _, info = plan_car_trips(flat, True, 30.0, [t1, t2], P)
+    have = 0.30 * P.car_kwh
+    reserve = P.car_reserve_soc / 100.0 * P.car_kwh
+    # vor der ersten Fahrt: beide Fahrten plus Reserve, damit ein vergessenes Anstecken nicht schadet
+    assert abs(sum(out[:40]) * SLOT_H - (18.0 + 18.0 + reserve - have)) < 0.01
+    assert info[0]["folge_kwh"] == 18.0 and info[0]["fehlt_kwh"] == 0

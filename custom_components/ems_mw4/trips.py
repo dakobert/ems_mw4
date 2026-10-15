@@ -95,6 +95,9 @@ def _hop_km(a: str | None, b: str | None) -> float:
     return 6371.0 * 2 * math.asin(math.sqrt(h)) * 1.3
 
 
+FOLLOW_TRIP_H = 36  # nächste Fahrt gilt als Folgetag, wenn sie so bald nach der Rückkehr startet
+
+
 def build_trips(visits: list[dict[str, Any]], routes: dict[str, dict[str, Any]], p: Params) -> list[dict[str, Any]]:
     """Aufenthalte zu Fahrten: Abfahrt, Rückkehr, Energie. Lohnt die Heimfahrt zwischen zwei Terminen nicht, werden sie zur Kette."""
     legs = []
@@ -135,6 +138,11 @@ def build_trips(visits: list[dict[str, Any]], routes: dict[str, dict[str, Any]],
             out.append({**leg, "kette": False})
     for trip in out:
         trip["kwh"] = round(trip["km"] * p.car_kwh_per_100km / 100.0, 1)
+    # Folgetag-Puffer (Roy 15.10.): Steht am nächsten Tag die nächste Fahrt an, wird deren Energie vor dieser
+    # Fahrt schon mitgeladen. Vergisst man abends das Anstecken, reicht es trotzdem.
+    for trip, nxt in zip(out, out[1:] + [None]):
+        follow = nxt is not None and nxt["abfahrt"] - trip["rueckkehr"] <= timedelta(hours=FOLLOW_TRIP_H)
+        trip["folge_kwh"] = nxt["kwh"] if follow else 0.0
     return out
 
 

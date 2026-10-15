@@ -251,7 +251,6 @@ SETTINGS: tuple[Setting, ...] = (
     Setting("car_cheap_below_mean_ct", "Auto sehr günstig: Abstand zum Mittel", 0, 20, 0.5, "ct/kWh", "mdi:cash-minus"),
     Setting("car_kwh_per_100km", "Auto Verbrauch", 12, 30, 0.5, "kWh/100 km", "mdi:speedometer"),
     Setting("trip_buffer_min", "Fahrt: Puffer vor Abfahrt", 0, 60, 5, "min", "mdi:clock-start"),
-    Setting("trip_return_buffer_min", "Fahrt: Puffer nach Terminende", 0, 90, 5, "min", "mdi:clock-end"),
     Setting("dhw_kwh", "Warmwasser Energie je Ladung", 0.5, 4, 0.1, "kWh", "mdi:water-boiler"),
     Setting("dhw_skip_above_c", "Warmwasser: heute keine Ladung ab", 38, 60, 1, "°C", "mdi:thermometer-water"),
     Setting("heat_limit_c", "Heizgrenze", 10, 20, 0.5, "°C", "mdi:thermometer-lines"),
