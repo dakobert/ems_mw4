@@ -162,6 +162,14 @@ def with_routes(
     return out
 
 
+def drop_finished(trips: list[dict[str, Any]], now: datetime, connected: bool) -> list[dict[str, Any]]:
+    """Ist das Auto angesteckt, sind bereits begonnene Fahrten vorbei – auch wenn der Kalender eine spätere
+    Rückkehr erwartet (Termin früher zu Ende). Ihr Verbrauch steckt dann schon im Ladestand."""
+    if not connected:
+        return trips
+    return [t for t in trips if t["abfahrt"] > now]
+
+
 def later_trips(
     visits: list[dict[str, Any]], routes: dict[str, dict[str, Any]], slots: list[datetime], p: Params
 ) -> list[dict[str, Any]]:

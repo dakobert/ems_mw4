@@ -433,6 +433,7 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         except Exception:  # noqa: BLE001 - Kalender oder Fahrzeit dürfen den Plan nie verhindern
             _LOGGER.exception("Fahrten konnten nicht gelesen werden")
             trips, self.trip_status = [], "Fehler beim Lesen"
+        trips = tr.drop_finished(trips, now, self.data.get("car_connected") == 1.0)
         self.sunny = th.sunny_tomorrow(
             slots, pv, [b + h for b, h in zip(base, heat)], (now + timedelta(days=1)).date(), self.params.battery_kwh)
         plan = await self.hass.async_add_executor_job(
@@ -744,6 +745,11 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.async_update_listeners()
 
     async def _async_execute(self) -> None:
+        # Auto gerade angesteckt: sofort neu planen (z. B. früher als geplant zurück)
+        connected = (self.data or {}).get("car_connected")
+        if connected == 1.0 and getattr(self, "_last_connected", None) == 0.0:
+            self.hass.async_create_task(self.async_replan())
+        self._last_connected = connected
         age = (dt_util.now() - self.plan_time).total_seconds() if self.plan_time else None
         intent = ex.decide(self.plan, self.plan_index(), self.data or {}, age, PLAN_MAX_AGE_S, self._car_params(self.params))
         self.intent = intent

@@ -579,3 +579,12 @@ def test_car_trips_follow_day_buffer():
     # vor der ersten Fahrt: beide Fahrten plus Reserve, damit ein vergessenes Anstecken nicht schadet
     assert abs(sum(out[:40]) * SLOT_H - (18.0 + 18.0 + reserve - have)) < 0.01
     assert info[0]["folge_kwh"] == 18.0 and info[0]["fehlt_kwh"] == 0
+
+
+def test_drop_finished_when_plugged_in_early():
+    from custom_components.ems_mw4 import trips as tr
+    now = SLOTS[50]
+    running = {"abfahrt": SLOTS[40], "rueckkehr": SLOTS[64]}
+    later = {"abfahrt": SLOTS[136], "rueckkehr": SLOTS[160]}
+    assert tr.drop_finished([running, later], now, True) == [later]  # früher zurück und angesteckt
+    assert tr.drop_finished([running, later], now, False) == [running, later]  # noch unterwegs
