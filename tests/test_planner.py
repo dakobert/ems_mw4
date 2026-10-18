@@ -334,15 +334,15 @@ def test_trips_parse_and_plan():
     near = {found[0]["address"]: {"km": 4.9, "min": 8.0, "t": now.isoformat()}}
     assert tr.with_routes(found, near, SLOTS, P) == []  # bis 5 km keine Fahrt
     trips = tr.with_routes(found, routes, SLOTS, P)
-    assert trips[0]["kwh"] == 20.0 and trips[0]["km"] == 100.0 and trips[0]["dep_index"] == 76  # 20 h - 45 min - 15 min = 19 h
+    assert trips[0]["kwh"] == 20.0 and trips[0]["km"] == 100.0 and trips[0]["dep_index"] == 73  # 20 h - 45 min - 20 min - 30 min fertig = 18:25 -> Slot 73
     prices = [40.0] * N
     prices[10], prices[11] = 10.0, 12.0
     prices[100] = 1.0  # billig, aber nach der Abfahrt
     out, away, info = plan_car_trips(prices, True, 30.0, trips, P)
     # Bedarf: 20 kWh + 20 % Reserve (12,94) - vorhanden (19,41) = 13,53 kWh
     assert abs(sum(out) * SLOT_H - 13.53) < 0.01 and info[0]["fehlt_kwh"] == 0.0
-    assert out[10] > 0 and out[11] > 0 and out[100] == 0 and all(v == 0 for v in out[76:])
-    assert away[76] and away[80] and not away[75]
+    assert out[10] > 0 and out[11] > 0 and out[100] == 0 and all(v == 0 for v in out[73:])
+    assert away[73] and away[80] and not away[72]
     # genug geladen: nichts tun; nicht angesteckt: Bedarf melden
     assert sum(plan_car_trips(prices, True, 80.0, trips, P)[0]) == 0
     out, _, info = plan_car_trips(prices, False, 30.0, trips, P)
@@ -406,7 +406,7 @@ def test_trip_chain_allday_multiday_overnight():
     assert len(chain) == 1 and chain[0]["kette"] and chain[0]["summary"] == "A + B"
     hop = tr._hop_km(a, b)
     assert 14 < hop < 15 and abs(chain[0]["km"] - (50 + hop + 60)) < 0.1
-    assert chain[0]["abfahrt"] == datetime(2026, 10, 5, 8, 5, tzinfo=tz)
+    assert chain[0]["abfahrt"] == datetime(2026, 10, 5, 8, 0, tzinfo=tz)
     assert chain[0]["rueckkehr"] == datetime(2026, 10, 5, 15, 25, tzinfo=tz)  # Ende 14:00 + 20 min + 50 min x 1,3
     # weit entfernt, 3 h Pause: Heimfahrt lohnt nicht -> Kette
     far = {"A": {"km": 100.0, "min": 70.0, "t": ""}, "B": {"km": 120.0, "min": 80.0, "t": ""}}
@@ -426,7 +426,7 @@ def test_trip_chain_allday_multiday_overnight():
     assert len(days) == 3 and days[0]["abfahrt"].hour == 7 and days[0]["rueckkehr"].hour == 17
     # mehrtägig mit Uhrzeit: erster Tag ab Beginn, letzter Tag bis Ende
     multi = tr.build_trips(tr.parse_events([ev("2026-10-05T10:00:00+02:00", "2026-10-06T15:00:00+02:00", "A", a)], now), routes, P)
-    assert len(multi) == 2 and multi[0]["abfahrt"] == datetime(2026, 10, 5, 9, 5, tzinfo=tz)
+    assert len(multi) == 2 and multi[0]["abfahrt"] == datetime(2026, 10, 5, 9, 0, tzinfo=tz)
     assert multi[0]["rueckkehr"].hour == 17 and multi[1]["abfahrt"].hour == 7
     assert multi[1]["rueckkehr"] == datetime(2026, 10, 6, 16, 12, tzinfo=tz)  # 15:00 + 20 min + 40 min x 1,3
     # Übernachtung: eine Fahrt, durchgehend abwesend

@@ -156,7 +156,8 @@ def with_routes(
         if trip["abfahrt"] < slots[0] or trip["abfahrt"] >= slots[-1] + step:
             continue
         out.append({
-            **trip, "dep_index": int((trip["abfahrt"] - slots[0]) / step),
+            # Laden muss trip_ready_min vor der Abfahrt fertig sein (Roy 18.10.)
+            **trip, "dep_index": max(0, int((trip["abfahrt"] - timedelta(minutes=p.trip_ready_min) - slots[0]) / step)),
             "back_index": min(len(slots), int((trip["rueckkehr"] - slots[0]) / step) + 1),
         })
     return out
