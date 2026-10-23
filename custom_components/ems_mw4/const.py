@@ -20,13 +20,16 @@ HEAT_DATA_FROM = "2026-10-06"
 CONF_ROOM_SENSORS = "room_sensors"
 
 # Räume, die Roy auf 21 °C haben will (11.10.2026). Der erste Fühler ist der Führungsraum.
-# Schlafzimmer, Bad OG, Büro, Wohnen/Kochen, Gäste und Empfang regelt Roy am Verteiler bewusst anders.
+# Schlafzimmer, Büro, Wohnen/Kochen, Gäste und Empfang regelt Roy am Verteiler bewusst anders (Bad OG: MIN_ROOMS).
 DEFAULT_ROOM_SENSORS = [
     "sensor.temperatursensor_wohnzimmer_temperature",
     "sensor.temperatursensor_bad_eg_temperature",
     "sensor.temperatursensor_kuche_temperature",
     "sensor.temperatursensor_eg_1_temperature",  # Flur
 ]
+# Mindesträume (Roy 23.10.2026): Bad OG ist am Verteiler voll offen und bekommt am wenigsten Wärme.
+# Fällt es unter seinen Mindestwert, bestimmt es die Raumreferenz. Die anderen Räume drosselt Roy am Verteiler.
+MIN_ROOMS = {"sensor.temperatursensor_bad_og_temperature": 21.0}
 # Frühere Vorgaben; eine so gespeicherte Auswahl wird durch die aktuelle ersetzt
 LEGACY_ROOM_SENSORS = [
     [

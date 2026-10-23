@@ -208,19 +208,22 @@ def last_dhw_hot(samples: list[dict[str, Any]], threshold: float) -> datetime | 
     return None
 
 
-def room_reference(values: list[float], lead: float | None, lead_min_c: float) -> float | None:
+def room_reference(values: list[float], leads: list[tuple[float, float]]) -> float | None:
     """Raumreferenz: Median der Führungsräume. Ausreißer (Kochen, Lüften) fallen heraus.
 
-    Liegt der Führungsraum (Wohnzimmer) unter lead_min_c, zählt er allein.
+    leads: (Wert, Mindestwert) der Mindesträume (Wohnzimmer, Bad OG). Liegt einer darunter,
+    zählt der kälteste davon, sofern er unter dem Median liegt.
     """
-    if not values:
+    pool = values or [v for v, _ in leads]
+    if not pool:
         return None
-    if lead is not None and lead < lead_min_c:
-        return round(lead, 2)
-    v = sorted(values)
+    v = sorted(pool)
     n = len(v)
-    mid = v[n // 2] if n % 2 else (v[n // 2 - 1] + v[n // 2]) / 2
-    return round(mid, 2)
+    ref = v[n // 2] if n % 2 else (v[n // 2 - 1] + v[n // 2]) / 2
+    for value, minimum in leads:
+        if value < minimum:
+            ref = min(ref, value)
+    return round(ref, 2)
 
 
 def sunny_tomorrow(slots: list, pv_kw: list[float], load_kw: list[float], tomorrow, battery_kwh: float) -> bool:

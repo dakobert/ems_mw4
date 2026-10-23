@@ -37,6 +37,7 @@ from .const import (  # noqa: I001
     KEY_SOURCES_OK,
     MAX_SAMPLES,
     ROOM_FROZEN_S,
+    MIN_ROOMS,
     ROOM_MAX_AGE_S,
     SOURCES,
     STORE_KEY,
@@ -209,32 +210,44 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self._accepted[key] = raw
         return self._accepted[key]
 
+    def _room_value(self, entity_id: str, now: datetime) -> float | None:
+        state = self.hass.states.get(entity_id)
+        if state is None:
+            return None
+        value = to_number(state.state)
+        if value is None:
+            return None
+        if (now - state.last_reported).total_seconds() > ROOM_MAX_AGE_S:
+            return None
+        # Ein Neustart spielt den letzten Wert mit neuem Zeitstempel zurück (08.10.2026: zwei Fühler
+        # seit Mittag stumm). Deshalb zusätzlich: Wert seit Stunden unverändert = Fühler gilt als stumm.
+        seen = self._room_seen.get(entity_id)
+        if seen is None or seen[0] != value:
+            self._room_seen[entity_id] = (value, now)
+        elif (now - seen[1]).total_seconds() > ROOM_FROZEN_S:
+            return None
+        return value
+
     def _room_temperature(self, now: datetime) -> tuple[float | None, int]:
-        values: list[float] = []
-        lead: float | None = None
         sensors = self.room_sensors
+        values: list[float] = []
+        leads: list[tuple[float, float]] = []
         for entity_id in sensors:
-            state = self.hass.states.get(entity_id)
-            if state is None:
-                continue
-            value = to_number(state.state)
+            value = self._room_value(entity_id, now)
             if value is None:
-                continue
-            if (now - state.last_reported).total_seconds() > ROOM_MAX_AGE_S:
-                continue
-            # Ein Neustart spielt den letzten Wert mit neuem Zeitstempel zurück (08.10.2026: zwei Fühler
-            # seit Mittag stumm). Deshalb zusätzlich: Wert seit Stunden unverändert = Fühler gilt als stumm.
-            seen = self._room_seen.get(entity_id)
-            if seen is None or seen[0] != value:
-                self._room_seen[entity_id] = (value, now)
-            elif (now - seen[1]).total_seconds() > ROOM_FROZEN_S:
                 continue
             values.append(value)
             if entity_id == sensors[0]:
-                lead = value
-        if not values:
+                leads.append((value, self.params.room_target_c - 0.5))
+        extra = 0
+        for entity_id, minimum in MIN_ROOMS.items():
+            value = None if entity_id in sensors else self._room_value(entity_id, now)
+            if value is not None:
+                leads.append((value, minimum))
+                extra += 1
+        if not values and not leads:
             return None, 0
-        return th.room_reference(values, lead, self.params.room_target_c - 0.5), len(values)
+        return th.room_reference(values, leads), len(values) + extra
 
     async def _async_update_data(self) -> dict[str, Any]:
         now = dt_util.utcnow()

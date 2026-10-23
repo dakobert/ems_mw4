@@ -511,12 +511,18 @@ async def test_room_frozen_sensor_dropped(hass: HomeAssistant) -> None:
 
 def test_room_reference() -> None:
     from custom_components.ems_mw4.thermal import room_reference
-    assert room_reference([21.0, 21.1, 22.0, 22.2], 21.0, 20.5) == 21.55  # Median der vier
-    assert room_reference([21.0, 21.1, 22.0, 25.0], 21.0, 20.5) == 21.55  # Küche beim Kochen fällt heraus
-    assert room_reference([20.3, 21.1, 22.0, 22.2], 20.3, 20.5) == 20.3  # Wohnzimmer zu kalt: zählt allein
-    assert room_reference([21.0, 21.4], None, 20.5) == 21.2
-    assert room_reference([21.0, 21.4, 22.0], 21.0, 20.5) == 21.4
-    assert room_reference([], None, 20.5) is None
+    wz = lambda v: (v, 20.5)  # noqa: E731
+    assert room_reference([21.0, 21.1, 22.0, 22.2], [wz(21.0)]) == 21.55  # Median der vier
+    assert room_reference([21.0, 21.1, 22.0, 25.0], [wz(21.0)]) == 21.55  # Küche beim Kochen fällt heraus
+    assert room_reference([20.3, 21.1, 22.0, 22.2], [wz(20.3)]) == 20.3  # Wohnzimmer zu kalt: zählt
+    assert room_reference([21.0, 21.4], []) == 21.2
+    assert room_reference([21.0, 21.4, 22.0], [wz(21.0)]) == 21.4
+    assert room_reference([], []) is None
+    # Bad OG (Roy 23.10.): voll offen, Mindestwert 21 – liegt es darunter, bestimmt es die Referenz
+    assert room_reference([21.0, 21.4, 22.0], [wz(21.0), (20.4, 21.0)]) == 20.4
+    assert room_reference([21.0, 21.4, 22.0], [wz(21.0), (21.2, 21.0)]) == 21.4  # warm genug: Median
+    assert room_reference([20.2, 21.4, 22.0], [wz(20.2), (20.4, 21.0)]) == 20.2  # kältester Mindestraum
+    assert room_reference([], [(20.4, 21.0)]) == 20.4  # nur Bad OG gültig
 
 
 def test_sunny_tomorrow() -> None:
