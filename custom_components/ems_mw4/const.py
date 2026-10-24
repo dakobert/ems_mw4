@@ -14,6 +14,10 @@ STORE_KEY = f"{DOMAIN}.messreihe"
 MAX_SAMPLES = 120 * 96  # 120 Tage im 15-Minuten-Raster
 ROOM_MAX_AGE_S = 3 * 3600
 ROOM_FROZEN_S = 4 * 3600  # so lange exakt derselbe Wert: Fühler gilt als stumm
+# Auto-Ladestand gilt als veraltet, wenn das Auto so lange nichts meldet (BMW-Störung 23.–25.10.2026)
+CAR_SOC_STALE_S = 6 * 3600
+# Zeitpunkt des letzten erfolgreichen Abrufs bei BMW (CarData), sonst zählt der Ladestand-Sensor selbst
+CAR_DATA_TIME_ENTITY = "sensor.cardata_debug_device_last_telematics_api_call"
 # Bis 05.10.2026 abends waren die Heizkreise abgesperrt: Tage davor taugen nicht zum Lernen der Heizlast.
 HEAT_DATA_FROM = "2026-10-06"
 
@@ -145,6 +149,7 @@ class Params:
     car_target_soc: float = 100.0
     car_reserve_soc: float = 20.0
     pv_safety: float = 0.7  # Abschlag auf die PV-Prognose bei Auto-Entscheidungen
+    pv_plan_pct: float = 80.0  # Roy 25.10.: PV-Prognose vorsichtig ansetzen, lieber günstig zukaufen
     car_after_battery_soc: float = 95.0  # PV-Überschuss: erst Speicher bis hier, dann Auto (Roy 12.10.: Speicher vorrangig)
     car_after_battery_soc_sunny: float = 50.0  # wenn morgen viel PV-Überschuss erwartet wird (Sommer): Speicher nur bis hier vorrangig
     car_battery_to_car: bool = False  # vom Coordinator gesetzt: Speicher darf ins Auto entladen (bis zur Schwelle)
@@ -248,6 +253,7 @@ class Setting:
 SETTINGS: tuple[Setting, ...] = (
     Setting("battery_min_soc", "Speicher Mindest-Ladestand", 5, 50, 1, "%", "mdi:battery-low"),
     Setting("battery_wear_ct", "Speicher Verschleißansatz", 0, 10, 0.5, "ct/kWh", "mdi:battery-heart-variant"),
+    Setting("pv_plan_pct", "PV-Prognose: Anteil für Planung", 50, 100, 5, "%", "mdi:solar-power-variant"),
     Setting("feed_in_ct", "Einspeisevergütung", 0, 20, 0.1, "ct/kWh", "mdi:transmission-tower-export"),
     Setting("car_target_soc", "Auto Ladeziel", 50, 100, 5, "%", "mdi:car-electric"),
     Setting("car_after_battery_soc", "Auto-PV-Laden erst ab Speicher", 50, 100, 5, "%", "mdi:home-battery"),

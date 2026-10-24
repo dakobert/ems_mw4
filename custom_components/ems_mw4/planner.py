@@ -347,13 +347,16 @@ def build_plan(
     heat_kw, heat_mode, heat_blocks = plan_heating(
         slots, prices, temps if temps is not None else [None] * n, heat_kw, room_temp, quiet, p
     )
-    fixed = [base_kw[i] + heat_kw[i] - pv_kw[i] for i in range(n)]
+    # PV vorsichtig ansetzen (Roy 25.10.): lieber günstig zukaufen als später teuer nachkaufen
+    pv_plan = [v * p.pv_plan_pct / 100.0 for v in pv_kw]
+    fixed = [base_kw[i] + heat_kw[i] - pv_plan[i] for i in range(n)]
     dhw = plan_dhw(slots, prices, fixed, dhw_temp, p)
     # Fahrten aus dem Kalender gehen vor; unterwegs wird nicht geladen
     car_trip, away, trip_info = plan_car_trips(prices, car_connected, car_soc, trips or [], p)
     # Für das Auto nutzbarer PV-Überschuss: vorsichtig gerechnet, nach Auffüllen des Speichers,
     # und höchstens der Überschuss, der anfällt, während das Auto zu Hause steht
-    pv_surplus = [max(0.0, -(fixed[i] + dhw[i])) for i in range(n)]
+    # (hier die ungekürzte Prognose: pv_safety ist der Abschlag fürs Auto)
+    pv_surplus = [max(0.0, pv_kw[i] - base_kw[i] - heat_kw[i] - dhw[i]) for i in range(n)]
     battery_fill = max(0.0, (100.0 - soc_pct) / 100.0 * p.battery_kwh) / p.battery_eff_charge
     pv_for_car = max(0.0, sum(pv_surplus) * SLOT_H * p.pv_safety - battery_fill)
     pv_for_car = min(pv_for_car, sum(v for v, gone in zip(pv_surplus, away) if not gone) * SLOT_H * p.pv_safety)
@@ -369,7 +372,8 @@ def build_plan(
     car_pv = [0.0] * n
     remaining = car_info["bedarf_kwh"] - sum(car_grid) * SLOT_H if car_connected else 0.0
     if remaining > 0:
-        first = next((i for i in range(n) if batt["soc"][i] >= p.car_after_battery_soc), None)
+        # soc[i] ist der Stand am Ende von Slot i: das Auto darf erst im Slot danach
+        first = next((i + 1 for i in range(n) if batt["soc"][i] >= p.car_after_battery_soc), None)
         if soc_pct >= p.car_after_battery_soc:
             first = 0
         if first is not None:
@@ -403,6 +407,7 @@ def build_plan(
         "price_ct": prices,
         "price_estimated": estimated,
         "pv_kw": pv_kw,
+        "pv_plan_kw": [round(v, 3) for v in pv_plan],
         "base_kw": base_kw,
         "heat_kw": [round(v, 3) for v in heat_kw],
         "heat_forecast_kw": heat_forecast,

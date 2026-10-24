@@ -35,6 +35,35 @@ def test_price_series_fills_unknown():
     assert prices[0] is None
 
 
+def test_price_series_day_type():
+    # Roy 25.10.: unbekannter Werktag nicht wie der Sonntag davor schätzen
+    tz = SLOTS[0].tzinfo
+    sunday = datetime(2026, 10, 25, 0, 0, tzinfo=tz)
+    slots = [sunday + timedelta(minutes=15 * i) for i in range(192)]  # So + Mo
+    known = {s: 21.0 for s in slots[:96]}  # Sonntag bekannt, billig
+    history = [(sunday - timedelta(days=d) + timedelta(minutes=15 * i), 40.0)
+               for d in (1, 2, 3, 4, 5, 6) for i in range(96)]  # Mo–Fr 40 ct, Sa auch 40
+    prices, est = fc.price_series(slots, known, history)
+    monday_8 = 96 + 32
+    assert est[monday_8] and prices[monday_8] == 40.0  # Median der Werktage, nicht 21 vom Sonntag
+    assert not est[10] and prices[10] == 21.0
+    # ohne Historie: wie bisher der Vortag
+    prices, _ = fc.price_series(slots, known)
+    assert prices[monday_8] == 21.0
+
+
+def test_pv_plan_share():
+    from dataclasses import replace as _r
+    prices = [30.0] * N
+    pv = [4.0 if 10 <= s.hour < 14 else 0.0 for s in SLOTS]
+    full = build_plan(SLOTS, prices, [False] * N, pv, [0.5] * N, [0.0] * N, 50.0, 55.0, False, None, prices,
+                      _r(P, pv_plan_pct=100.0))
+    part = build_plan(SLOTS, prices, [False] * N, pv, [0.5] * N, [0.0] * N, 50.0, 55.0, False, None, prices, P)
+    assert part["pv_kw"] == pv  # Anzeige und Auswertung: ungekürzte Prognose
+    assert part["pv_plan_kw"][44] == 3.2 and full["pv_plan_kw"][44] == 4.0
+    assert sum(part["grid_kw"]) >= sum(full["grid_kw"])  # vorsichtig: eher mehr Netzbezug geplant
+
+
 def test_pv_series():
     hours = {SLOTS[0].date(): {"12:00": 4.0, "13:00": "x"}}
     pv = fc.pv_series(SLOTS, hours)

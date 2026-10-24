@@ -38,6 +38,8 @@ from .const import (  # noqa: I001
     MAX_SAMPLES,
     ROOM_FROZEN_S,
     MIN_ROOMS,
+    CAR_SOC_STALE_S,
+    CAR_DATA_TIME_ENTITY,
     ROOM_MAX_AGE_S,
     SOURCES,
     STORE_KEY,
@@ -153,6 +155,9 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._block_open: dict[str, Any] | None = None
         self._trouble_since: datetime | None = None
         self._last_push: datetime | None = None
+        self.car_soc_stale = False
+        self.car_stale_hours: int | None = None
+        self._car_stale_pushed = False
         self.intent: dict[str, Any] = {"grund": "noch nicht gerechnet"}
         self.last_written: dict[str, Any] = {}
         self._psm_changes: list[datetime] = []
@@ -420,7 +425,7 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         slots = fc.build_slots(now, HORIZON_SLOTS)
         midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
         known = await ems_data.async_fetch_prices(self.hass, midnight - timedelta(days=1), 4)
-        prices, estimated = fc.price_series(slots, known)
+        prices, estimated = fc.price_series(slots, known, self._price_history(now))
         if any(p is None for p in prices):
             self.plan_status = "keine Preise, letzter Plan gilt weiter"
             return
@@ -447,15 +452,19 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             _LOGGER.exception("Fahrten konnten nicht gelesen werden")
             trips, self.trip_status = [], "Fehler beim Lesen"
         trips = tr.drop_finished(trips, now, self.data.get("car_connected") == 1.0)
+        car_soc = self._car_soc_for_plan(now)
         self.sunny = th.sunny_tomorrow(
             slots, pv, [b + h for b, h in zip(base, heat)], (now + timedelta(days=1)).date(), self.params.battery_kwh)
         plan = await self.hass.async_add_executor_job(
             build_plan, slots, prices, estimated, pv, base, heat, soc, self.data.get("dhw_temp"),
-            self.data.get("car_connected") == 1.0, self.data.get("car_soc"), history,
+            self.data.get("car_connected") == 1.0, car_soc, history,
             self._car_params(await self._dhw_params(now)),
             temps, self.data.get(KEY_ROOM_TEMP), self.quiet_slots(slots), trips,
         )
         plan["temp_c"] = temps
+        if isinstance(plan.get("car"), dict):
+            plan["car"]["ladestand_veraltet"] = self.car_soc_stale
+            plan["car"]["ladestand_geplant"] = car_soc
         if isinstance(plan.get("car"), dict):
             plan["car"]["ab_speicher_soc"] = self._car_params(self.params).car_after_battery_soc
         daily = await ems_data.async_fetch_daily_means(self.hass, weather)
@@ -463,6 +472,52 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.plan, self.plan_time = plan, now
         self._record_forecast(now, plan)
         self.plan_status = "ok" if not any(estimated[:96]) else "ok, Preise teils geschätzt"
+
+    def _price_history(self, now: datetime) -> list[tuple[datetime, float]]:
+        """Preise der letzten 14 Tage aus den Messpunkten, für die Schätzung unbekannter Tage."""
+        out: list[tuple[datetime, float]] = []
+        for s in self.samples[-14 * 96:]:
+            price = s.get("price")
+            if price is None or not s.get("t"):
+                continue
+            try:
+                out.append((dt_util.as_local(datetime.fromisoformat(s["t"])), float(price)))
+            except (TypeError, ValueError):
+                continue
+        return out
+
+    def _car_soc_for_plan(self, now: datetime) -> float | None:
+        """Ladestand fürs Planen. Meldet das Auto seit Stunden nichts (BMW-Störung 23.–25.10.2026),
+        gilt der Wert als veraltet: dann höchstens die Grundreserve annehmen, damit im Zweifel geladen wird."""
+        soc = self.data.get("car_soc") if self.data else None
+        state = self.hass.states.get(self.entity_for("car_soc"))
+        seen = None if state is None else state.last_reported
+        api = self.hass.states.get(CAR_DATA_TIME_ENTITY)
+        if api is not None:
+            fetched = dt_util.parse_datetime(api.state)
+            if fetched is not None and (seen is None or fetched > seen):
+                seen = fetched
+        age = None if seen is None else (dt_util.utcnow() - seen).total_seconds()
+        self.car_soc_stale = age is None or age > CAR_SOC_STALE_S
+        if not self.car_soc_stale:
+            self._car_stale_pushed = False
+            return soc
+        self.car_stale_hours = None if age is None else round(age / 3600)
+        return min(soc, self.params.car_reserve_soc) if soc is not None else self.params.car_reserve_soc
+
+    async def _async_car_stale_push(self, now: datetime) -> None:
+        """Einmal je Störung melden, nur tagsüber (7–22 Uhr)."""
+        if not self.car_soc_stale or self._car_stale_pushed or not 7 <= now.hour < 22:
+            return
+        if not self.hass.services.has_service("notify", NOTIFY_SERVICE):
+            return
+        self._car_stale_pushed = True
+        hours = f" seit {self.car_stale_hours} h" if self.car_stale_hours else ""
+        await self.hass.services.async_call("notify", NOTIFY_SERVICE, {
+            "title": "EMS MW4: Keine Autodaten",
+            "message": f"Das Auto meldet{hours} keinen Ladestand (BMW). Das EMS lädt vorsorglich bis zum "
+                       "Ladeziel in den günstigen Stunden.",
+        }, blocking=False)
 
     def quiet_slots(self, slots: list[datetime]) -> tuple[int, int] | None:
         """Slot-Bereich des einmaligen Ruhefensters (nächstes Vorkommen), falls eingeschaltet."""
@@ -832,6 +887,7 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self._comfort_touched, self._comfort_written_at = False, None
         self._track_block(target, intent)
         await self._async_watch()
+        await self._async_car_stale_push(dt_util.now())
         # Wallbox
         if self.switches[SWITCH_WALLBOX] and intent.get("car") is not None:
             written["car"] = await self._async_wallbox(intent["car"])

@@ -20,11 +20,21 @@ def build_slots(now: datetime, count: int = HORIZON_SLOTS) -> list[datetime]:
     return [start + timedelta(minutes=SLOT_MIN * i) for i in range(count)]
 
 
-def price_series(slots: list[datetime], known: dict[datetime, float]) -> tuple[list[float | None], list[bool]]:
-    """Preis je Slot in ct/kWh. Unbekannte Slots: gleicher Zeitpunkt am letzten bekannten Tag.
+def price_series(
+    slots: list[datetime], known: dict[datetime, float], history: Iterable[tuple[datetime, float]] = ()
+) -> tuple[list[float | None], list[bool]]:
+    """Preis je Slot in ct/kWh. Rückgabe: (Preise, geschätzt-Kennzeichen).
 
-    Rückgabe: (Preise, geschätzt-Kennzeichen).
+    Unbekannte Slots (Roy 25.10.): Median derselben Uhrzeit an gleichartigen Tagen (Werktag bzw.
+    Wochenende) der letzten zwei Wochen. Sonst gleicher Zeitpunkt am letzten bekannten Tag.
     """
+    tz = slots[0].tzinfo if slots else None
+    by_type: dict[tuple[bool, int, int], list[float]] = defaultdict(list)
+    for t, price in [*history, *known.items()]:
+        if price is None:
+            continue
+        local = t.astimezone(tz) if tz is not None and t.tzinfo is not None else t
+        by_type[(local.weekday() >= 5, local.hour, local.minute)].append(price)
     prices: list[float | None] = []
     estimated: list[bool] = []
     for slot in slots:
@@ -32,12 +42,14 @@ def price_series(slots: list[datetime], known: dict[datetime, float]) -> tuple[l
             prices.append(known[slot])
             estimated.append(False)
             continue
-        value = None
-        for days in range(1, 8):
-            earlier = slot - timedelta(days=days)
-            if earlier in known:
-                value = known[earlier]
-                break
+        same = by_type.get((slot.weekday() >= 5, slot.hour, slot.minute), [])
+        value = round(median(same), 2) if len(same) >= 2 else None
+        if value is None:
+            for days in range(1, 8):
+                earlier = slot - timedelta(days=days)
+                if earlier in known:
+                    value = known[earlier]
+                    break
         prices.append(value)
         estimated.append(True)
     return prices, estimated
