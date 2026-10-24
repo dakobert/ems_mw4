@@ -158,6 +158,7 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.car_soc_stale = False
         self.car_stale_hours: int | None = None
         self._car_stale_pushed = False
+        self._car_soc_seen: tuple[float, datetime, bool] | None = None
         self.intent: dict[str, Any] = {"grund": "noch nicht gerechnet"}
         self.last_written: dict[str, Any] = {}
         self._psm_changes: list[datetime] = []
@@ -491,12 +492,17 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         gilt der Wert als veraltet: dann höchstens die Grundreserve annehmen, damit im Zweifel geladen wird."""
         soc = self.data.get("car_soc") if self.data else None
         state = self.hass.states.get(self.entity_for("car_soc"))
-        seen = None if state is None else state.last_reported
+        # Ein HA-Neustart setzt last_reported neu (25.10.2026). Maßgeblich ist daher der letzte erfolgreiche
+        # BMW-Abruf, dazu eine Änderung des Ladestands, die seit dem Start beobachtet wurde.
+        if soc is not None and (self._car_soc_seen is None or self._car_soc_seen[0] != soc):
+            self._car_soc_seen = (soc, dt_util.utcnow(), self._car_soc_seen is not None)
+        changed = self._car_soc_seen[1] if self._car_soc_seen and self._car_soc_seen[2] else None
         api = self.hass.states.get(CAR_DATA_TIME_ENTITY)
-        if api is not None:
-            fetched = dt_util.parse_datetime(api.state)
-            if fetched is not None and (seen is None or fetched > seen):
-                seen = fetched
+        fetched = dt_util.parse_datetime(api.state) if api is not None else None
+        if fetched is not None:
+            seen = max(fetched, changed) if changed else fetched
+        else:
+            seen = None if state is None else state.last_reported
         age = None if seen is None else (dt_util.utcnow() - seen).total_seconds()
         self.car_soc_stale = age is None or age > CAR_SOC_STALE_S
         if not self.car_soc_stale:
