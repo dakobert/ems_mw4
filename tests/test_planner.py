@@ -462,6 +462,19 @@ def test_trip_chain_allday_multiday_overnight():
     night = tr.build_trips(tr.parse_events([ev("2026-10-05", "2026-10-08", "A", a, "Hotel #Übernachtung")], now), routes, P)
     assert len(night) == 1 and night[0]["km"] == 100.0
     assert night[0]["abfahrt"] == datetime(2026, 10, 5, 7, 0, tzinfo=tz) and night[0]["rueckkehr"] == datetime(2026, 10, 7, 17, 0, tzinfo=tz)
+    # Übernachtung über zwei getrennte Termine (Roy 25.10., Bielefeld): Markierung an einem genügt
+    two_days = [
+        ev("2026-10-05T09:00:00+02:00", "2026-10-05T16:00:00+02:00", "A", a, "<p>#&uuml;bernachtung</p>"),
+        ev("2026-10-06T09:00:00+02:00", "2026-10-06T16:00:00+02:00", "A", a),
+    ]
+    stay = tr.build_trips(tr.parse_events(two_days, now), routes, P)
+    assert len(stay) == 1 and stay[0]["km"] == 100.0  # einmal hin, einmal zurück
+    assert stay[0]["abfahrt"] == datetime(2026, 10, 5, 8, 0, tzinfo=tz)
+    assert stay[0]["rueckkehr"] == datetime(2026, 10, 6, 17, 12, tzinfo=tz)
+    two_days[0]["description"], two_days[1]["summary"] = "", "A #Übernachtung"  # Markierung im Titel des 2. Tags
+    assert len(tr.build_trips(tr.parse_events(two_days, now), routes, P)) == 1
+    two_days[1]["summary"] = "A"  # ohne Markierung: zwei Tagesfahrten
+    assert len(tr.build_trips(tr.parse_events(two_days, now), routes, P)) == 2
     # ohne Koordinaten und ohne Postleitzahl: keine Fahrt; später als das Planfenster: Liste
     assert tr.parse_events([ev("2026-10-05", "2026-10-06", "Dresden", None)], now) == []
     slots = [now + timedelta(minutes=15 * i) for i in range(192)]

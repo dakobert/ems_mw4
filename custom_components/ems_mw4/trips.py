@@ -20,7 +20,7 @@ def is_address(location: str | None) -> bool:
     return bool(location and _PLZ.search(location))
 
 
-_OVERNIGHT = ("#übernachtung", "#uebernachtung", "#&uuml;bernachtung")
+_OVERNIGHT = ("#übernachtung", "#uebernachtung", "#&uuml;bernachtung", "#&#252;bernachtung")
 
 
 def _day_time(day: date, hours: float, tz: Any) -> datetime:
@@ -33,7 +33,8 @@ def parse_events(events: list[dict[str, Any]], now: datetime, p: Params | None =
     - Termin mit Uhrzeit am selben Tag: ein Aufenthalt von Beginn bis Ende.
     - Ganztägig: je Tag abwesend von 7 bis 17 Uhr (einstellbar), feste Abfahrt und Rückkehr.
     - Mehrtägig mit Uhrzeit: tägliche Hin- und Rückfahrt, erster Tag ab Beginn, letzter Tag bis Ende.
-    - „#übernachtung" in den Notizen: einmal hin, einmal zurück, dazwischen durchgehend abwesend.
+    - „#übernachtung" in Titel oder Notizen: einmal hin, einmal zurück, dazwischen durchgehend abwesend.
+      Gilt auch für zwei getrennte Termine an aufeinanderfolgenden Tagen (Roy 25.10.): Markierung an einem genügt.
     Ohne Koordinaten oder Adresse mit Postleitzahl ist ein Termin keine Fahrt.
     """
     p = p or Params()
@@ -45,8 +46,10 @@ def parse_events(events: list[dict[str, Any]], now: datetime, p: Params | None =
             continue
         if not coords and not is_address(location):
             continue
-        base = {"summary": event.get("summary") or "", "address": location or coords, "coords": coords}
-        overnight = any(tag in (event.get("description") or "").lower() for tag in _OVERNIGHT)
+        text = f"{event.get('summary') or ''} {event.get('description') or ''}".lower()
+        overnight = any(tag in text for tag in _OVERNIGHT)
+        base = {"summary": event.get("summary") or "", "address": location or coords, "coords": coords,
+                "overnight": overnight}
         try:
             if "T" not in start:  # ganztägig, Ende ist der Tag danach
                 first, last = date.fromisoformat(start[:10]), date.fromisoformat(end[:10]) - timedelta(days=1)
@@ -126,7 +129,10 @@ def build_trips(visits: list[dict[str, Any]], routes: dict[str, dict[str, Any]],
             leg["start"] - prev["end"]
             - timedelta(minutes=prev["min_rueck"] + leg["min_rueck"] + p.trip_buffer_min)
         )
-        if prev is not None and stay < timedelta(minutes=p.trip_home_stay_min) and leg["start"] >= prev["start"]:
+        # Übernachtung: Termin heute und morgen, einer davon markiert -> keine Heimfahrt dazwischen
+        night = prev is not None and (prev.get("overnight") or leg.get("overnight")) and (
+            leg["start"].date() - prev["end"].date()).days == 1
+        if prev is not None and (night or stay < timedelta(minutes=p.trip_home_stay_min)) and leg["start"] >= prev["start"]:
             same = leg["address"] == prev["address"]
             hop = 0.0 if same else _hop_km(prev["coords"], leg["coords"])
             prev["km"] = round(prev["km"] - prev["km_rueck"] + hop + leg["km_rueck"], 1)
@@ -134,6 +140,7 @@ def build_trips(visits: list[dict[str, Any]], routes: dict[str, dict[str, Any]],
             prev["summary"] = f"{prev['summary']} + {leg['summary']}"
             prev["end"], prev["rueckkehr"] = leg["end"], max(prev["rueckkehr"], leg["rueckkehr"])
             prev["address"], prev["coords"], prev["kette"] = leg["address"], leg["coords"], True
+            prev["overnight"] = leg.get("overnight")  # weitere Nacht nur, wenn auch dieser Termin markiert ist
         else:
             out.append({**leg, "kette": False})
     for trip in out:
