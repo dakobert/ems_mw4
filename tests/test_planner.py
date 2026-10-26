@@ -630,3 +630,34 @@ def test_drop_finished_when_plugged_in_early():
     later = {"abfahrt": SLOTS[136], "rueckkehr": SLOTS[160]}
     assert tr.drop_finished([running, later], now, True) == [later]  # früher zurück und angesteckt
     assert tr.drop_finished([running, later], now, False) == [running, later]  # noch unterwegs
+
+
+def test_absence_from_overnight():
+    from datetime import datetime, timedelta, timezone
+    from custom_components.ems_mw4 import trips as tr
+    tz = timezone(timedelta(hours=1))
+    now = datetime(2026, 11, 1, 12, 0, tzinfo=tz)
+
+    def ev(start, end, summary="Termin", desc=""):
+        return {"start": start, "end": end, "summary": summary, "location": "", "description": desc}
+
+    # Urlaub ganztägig 4.–9.11. (Ende exklusiv 10.11.), ohne Adresse: 5 Nächte
+    a = tr.absence([ev("2026-11-04", "2026-11-10", "Urlaub #übernachtung")], now, P)
+    assert a["naechte"] == 5
+    assert a["abfahrt"] == datetime(2026, 11, 4, 7, 0, tzinfo=tz)
+    assert a["rueckkehr"] == datetime(2026, 11, 9, 17, 0, tzinfo=tz)
+    assert a["absenken_ab"] == datetime(2026, 11, 3, 19, 0, tzinfo=tz)  # 12 h vorher
+    assert a["aufheizen_ab"] == datetime(2026, 11, 8, 5, 0, tzinfo=tz)  # 36 h vor Rückkehr
+    # zwei Nächte (Bielefeld-Art): keine Absenkung
+    assert tr.absence([ev("2026-11-04T09:00:00+01:00", "2026-11-04T16:00:00+01:00", desc="#übernachtung"),
+                       ev("2026-11-05T09:00:00+01:00", "2026-11-05T16:00:00+01:00", desc="#übernachtung"),
+                       ev("2026-11-06T09:00:00+01:00", "2026-11-06T16:00:00+01:00")], now, P) is None
+    # drei markierte Tagestermine am Stück, Rückkehr = Ende des Termins am vierten Tag
+    three = [ev(f"2026-11-0{d}T09:00:00+01:00", f"2026-11-0{d}T16:00:00+01:00", desc="<p>#&uuml;bernachtung</p>")
+             for d in (4, 5, 6)] + [ev("2026-11-07T09:00:00+01:00", "2026-11-07T15:00:00+01:00")]
+    a = tr.absence(three, now, P)
+    assert a["naechte"] == 3 and a["rueckkehr"] == datetime(2026, 11, 7, 15, 0, tzinfo=tz)
+    assert a["aufheizen_ab"] - a["absenken_ab"] >= timedelta(hours=24)
+    # ohne Markierung nichts; schon vorbei nichts
+    assert tr.absence([ev("2026-11-04", "2026-11-10", "Urlaub")], now, P) is None
+    assert tr.absence([ev("2026-11-04", "2026-11-10", "Urlaub #übernachtung")], datetime(2026, 11, 8, 6, 0, tzinfo=tz), P) is None

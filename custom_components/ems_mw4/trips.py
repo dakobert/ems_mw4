@@ -87,6 +87,71 @@ def parse_events(events: list[dict[str, Any]], now: datetime, p: Params | None =
     return sorted((v for v in visits if v["start"] > now), key=lambda v: v["start"])
 
 
+def _event_span(event: dict[str, Any], tz: Any, p: Params) -> tuple[date, date, datetime, datetime] | None:
+    """Erster und letzter Tag eines Termins samt Beginn und Ende (ganztägig: 7 bis 17 Uhr)."""
+    start, end = event.get("start"), event.get("end")
+    if not isinstance(start, str) or not isinstance(end, str):
+        return None
+    try:
+        if "T" not in start:
+            first, last = date.fromisoformat(start[:10]), date.fromisoformat(end[:10]) - timedelta(days=1)
+            last = max(last, first)
+            return first, last, _day_time(first, p.allday_depart_h, tz), _day_time(last, p.allday_back_h, tz)
+        begin, finish = datetime.fromisoformat(start).astimezone(tz), datetime.fromisoformat(end).astimezone(tz)
+    except ValueError:
+        return None
+    return begin.date(), max(finish.date(), begin.date()), begin, finish
+
+
+def absence(events: list[dict[str, Any]], now: datetime, p: Params | None = None) -> dict[str, Any] | None:
+    """Längere Abwesenheit aus „#übernachtung“-Terminen (Roy 26.10.2026), auch ohne Adresse.
+
+    Ein markierter Termin über mehrere Tage: Nächte vom ersten bis zum vorletzten Tag. Ein markierter Termin an
+    einem Tag: die Nacht danach. Ab away_min_nights Nächten am Stück: Absenken ab away_setback_before_h vor der
+    Abfahrt bis away_reheat_before_h vor der Rückkehr. Rückkehr = Ende des letzten Termins am Tag nach der
+    letzten Nacht, sonst dort 17 Uhr.
+    """
+    p = p or Params()
+    tz = now.tzinfo
+    nights: dict[date, datetime] = {}  # Nacht -> Beginn des Termins, der sie markiert
+    day_end: dict[date, datetime] = {}  # spätestes Terminende je Tag (alle Termine)
+    for event in events:
+        span = _event_span(event, tz, p)
+        if span is None:
+            continue
+        first, last, begin, finish = span
+        if (last - first).days > 60:
+            continue
+        day_end[last] = max(day_end.get(last, finish), finish)
+        text = f"{event.get('summary') or ''} {event.get('description') or ''}".lower()
+        if not any(tag in text for tag in _OVERNIGHT):
+            continue
+        day = first
+        while day < last or day == first:
+            nights.setdefault(day, begin)
+            nights[day] = min(nights[day], begin)
+            if day >= last:
+                break
+            day += timedelta(days=1)
+    for night in sorted(nights):
+        if night - timedelta(days=1) in nights:
+            continue  # nicht Beginn einer Folge
+        count, last_night = 0, night
+        while last_night + timedelta(days=count) in nights:
+            count += 1
+        last_night = night + timedelta(days=count - 1)
+        if count < p.away_min_nights:
+            continue
+        home_day = last_night + timedelta(days=1)
+        back = day_end.get(home_day) or _day_time(home_day, p.allday_back_h, tz)
+        depart = nights[night]
+        lower, reheat = depart - timedelta(hours=p.away_setback_before_h), back - timedelta(hours=p.away_reheat_before_h)
+        if reheat <= now or reheat - lower < timedelta(hours=p.away_min_setback_h):
+            continue
+        return {"naechte": count, "abfahrt": depart, "rueckkehr": back, "absenken_ab": lower, "aufheizen_ab": reheat}
+    return None
+
+
 def _hop_km(a: str | None, b: str | None) -> float:
     """Geschätzte Straßenentfernung zwischen zwei Zielen: Luftlinie mal 1,3."""
     try:

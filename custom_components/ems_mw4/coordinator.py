@@ -159,6 +159,8 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.car_stale_hours: int | None = None
         self._car_stale_pushed = False
         self._car_soc_seen: tuple[float, datetime, bool] | None = None
+        self.absence: dict[str, Any] | None = None
+        self._absence_cancelled: datetime | None = None
         self.intent: dict[str, Any] = {"grund": "noch nicht gerechnet"}
         self.last_written: dict[str, Any] = {}
         self._psm_changes: list[datetime] = []
@@ -459,7 +461,7 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         plan = await self.hass.async_add_executor_job(
             build_plan, slots, prices, estimated, pv, base, heat, soc, self.data.get("dhw_temp"),
             self.data.get("car_connected") == 1.0, car_soc, history,
-            self._car_params(await self._dhw_params(now)),
+            self._car_params(self._eff(await self._dhw_params(now))),
             temps, self.data.get(KEY_ROOM_TEMP), self.quiet_slots(slots), trips,
         )
         plan["temp_c"] = temps
@@ -574,6 +576,7 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             )
             events = (response or {}).get(CONF_TRIP_CALENDAR, {}).get("events", [])
         self.trip_shapes = [e["shape"] for e in events if e.get("shape") and e["shape"].get("felder")][:6]
+        self.absence = tr.absence(events, now, self.params)
         found = tr.parse_events(events, now, self.params)
         stale = now - timedelta(days=ROUTE_MAX_AGE_DAYS)
         lookups = 0
@@ -752,7 +755,7 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # Wärmeverhalten des Hauses aus der Messreihe; ersetzt den Startwert, sobald es belastbar ist
         self.house_model = th.fit_house(self.samples)
         p = replace(
-            self.params,
+            self._eff(self.params),
             heat_outdoor_coupling=th.learned_coupling(
                 self.house_model, self.params.heat_lookahead_h, self.params.heat_outdoor_coupling
             ),
@@ -769,6 +772,7 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         summer = self.hass.states.get(CONF_SUMMER_MODE)
         adv.update({
             "comfort_target_c": round(p.heat_comfort_base_c + adv["shift_k"], 1),
+            "abwesend": self.away_active(),
             "comfort_now_c": self._number(CONF_COMFORT_TEMP),
             "curve_now": curve,
             "curve_target": th.curve_target(curve, history, p) if steady else None,
@@ -822,10 +826,13 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # Auto gerade angesteckt: sofort neu planen (z. B. früher als geplant zurück)
         connected = (self.data or {}).get("car_connected")
         if connected == 1.0 and getattr(self, "_last_connected", None) == 0.0:
+            # früher zurück: Anstecken zu Hause nach der Abfahrt beendet die Abwesenheit
+            if self.absence and self.absence["abfahrt"] <= dt_util.now() < self.absence["aufheizen_ab"]:
+                self._absence_cancelled = self.absence["rueckkehr"]
             self.hass.async_create_task(self.async_replan())
         self._last_connected = connected
         age = (dt_util.now() - self.plan_time).total_seconds() if self.plan_time else None
-        intent = ex.decide(self.plan, self.plan_index(), self.data or {}, age, PLAN_MAX_AGE_S, self._car_params(self.params))
+        intent = ex.decide(self.plan, self.plan_index(), self.data or {}, age, PLAN_MAX_AGE_S, self._car_params(self._eff(self.params)))
         self.intent = intent
         written: dict[str, Any] = {}
         self._reset_quiet_when_over()
@@ -857,10 +864,13 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if self.switches[SWITCH_DHW] and intent.get("dhw") is not None:
             data = self.data or {}
             now = dt_util.now()
+            pd = self._eff(self.params)
+            away = self.away_active(now)
             since = getattr(self, "_pv_dhw_since", None)
             done_day = getattr(self, "_pv_dhw_day", None)
             pv_on, pv_done = ex.pv_dhw(
-                data, None if since is None else (now - since).total_seconds() / 60, done_day == now.date(), self.params)
+                data, None if since is None else (now - since).total_seconds() / 60, done_day == now.date(), pd)
+            pv_on = pv_on and not away
             if pv_on and since is None:
                 self._pv_dhw_since = now
             if not pv_on:
@@ -869,9 +879,11 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 self._pv_dhw_day = now.date()
             run_since = getattr(self, "_dhw_run_since", None)
             want_c, self._dhw_done = ex.dhw_target(
-                intent["dhw"] or pv_on, data.get("dhw_temp"), getattr(self, "_dhw_done", False) and not pv_on, self.params,
-                None if run_since is None else (now - run_since).total_seconds() / 60)
-            if want_c > self.params.dhw_base_c:
+                (intent["dhw"] or pv_on) and not away, data.get("dhw_temp"), getattr(self, "_dhw_done", False) and not pv_on,
+                pd, None if run_since is None else (now - run_since).total_seconds() / 60)
+            if away:
+                want_c, self._dhw_done = pd.dhw_base_c, False
+            if want_c > pd.dhw_base_c:
                 self._dhw_run_since = run_since or now
             else:
                 self._dhw_run_since = None
@@ -881,14 +893,14 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 current = self._number(entity_id)
                 if current is not None and abs(current - want_c) > 0.05:
                     await call("number", "set_value", {"entity_id": entity_id, "value": want_c}, blocking=True)
-            written["dhw"] = want_c > self.params.dhw_base_c
+            written["dhw"] = want_c > pd.dhw_base_c
             written["dhw_soll_c"] = want_c
         if self.switches[SWITCH_HEATING] and self.switches[SWITCH_PROACTIVE]:
             written.update(await self._async_proactive())
         elif self._comfort_touched and self._number(CONF_COMFORT_TEMP) is not None:
             await call(
                 "number", "set_value",
-                {"entity_id": CONF_COMFORT_TEMP, "value": self.params.heat_comfort_base_c}, blocking=True,
+                {"entity_id": CONF_COMFORT_TEMP, "value": self._eff(self.params).heat_comfort_base_c}, blocking=True,
             )
             self._comfort_touched, self._comfort_written_at = False, None
         self._track_block(target, intent)
@@ -954,6 +966,22 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         except ValueError:
             return None
 
+    def away_active(self, now: datetime | None = None) -> bool:
+        """Abwesenheit läuft: zwischen Absenken und Wiederaufheizen, nicht nach früher Rückkehr."""
+        a = self.absence
+        if not a:
+            return False
+        now = now or dt_util.now()
+        if self._absence_cancelled is not None and self._absence_cancelled == a["rueckkehr"]:
+            return False
+        return a["absenken_ab"] <= now < a["aufheizen_ab"]
+
+    def _eff(self, p: Params) -> Params:
+        """Bei Abwesenheit: Raumziel auf away_room_c, Komfortgrundwert 0,5 K darunter, Warmwasser praktisch aus."""
+        if not self.away_active():
+            return p
+        return replace(p, room_target_c=p.away_room_c, heat_comfort_base_c=p.away_room_c - 0.5, dhw_base_c=p.away_dhw_c)
+
     def _car_params(self, p: Params) -> Params:
         """Speicher-Vorrang vor dem Auto: im Winter bis 95 %, bei sonnigem Ausblick (Sommer) bis 50 % und
         dann darf der Speicher auch ins Auto entladen – er füllt sich am nächsten Tag wieder."""
@@ -991,7 +1019,8 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # eine laufende Warmwasserladung beenden: Sollwerte zurück auf den Grundwert
         for entity_id in CONF_DHW_TARGETS:
             current = self._number(entity_id)
-            if current is not None and current > self.params.dhw_base_c + 0.5 and getattr(self, "_dhw_done", None) is not None:
+            if current is not None and getattr(self, "_dhw_done", None) is not None and (
+                    current > self.params.dhw_base_c + 0.5 or current < self.params.dhw_base_c - 0.5):
                 await call("number", "set_value", {"entity_id": entity_id, "value": self.params.dhw_base_c}, blocking=True)
         state = self.hass.states.get(CONF_GOE_FRC)
         if state is not None and state.state in ("charge", "dont_charge"):

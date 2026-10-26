@@ -165,6 +165,13 @@ class Params:
     trip_home_stay_min: float = 60.0  # Kette, wenn zwischen zwei Terminen weniger Zeit zu Hause bliebe
     allday_depart_h: float = 7.0  # ganztägige Termine: angenommene Abwesenheit
     allday_back_h: float = 17.0
+    # Abwesenheit (Roy 26.10.): ab so vielen Nächten am Stück („#übernachtung“) Heizung absenken, Warmwasser aus
+    away_min_nights: int = 3
+    away_room_c: float = 17.0  # nicht darunter
+    away_dhw_c: float = 15.0  # Warmwasser praktisch aus; vor der Rückkehr wieder normal mit Hochladung
+    away_setback_before_h: float = 12.0  # so lange vor der Abfahrt schon absenken (Restwärme nutzen)
+    away_reheat_before_h: float = 36.0  # so lange vor der Rückkehr wieder normal heizen (Fußbodenheizung ist träge)
+    away_min_setback_h: float = 24.0  # kürzer lohnt sich nicht
     trip_min_km: float = 5.0  # näher gelegene Ziele zählen nicht als Fahrt
     car_cheap_below_mean_ct: float = 6.0
     base_load_default_w: float = 350.0

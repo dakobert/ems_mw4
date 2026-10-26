@@ -442,6 +442,10 @@ class EmsProactiveSensor(EmsPlanBase):
             "heizkurve_ist": adv.get("curve_now"),
             "heizkurve_empfohlen": adv.get("curve_target"),
             "sommerbetrieb": adv.get("sommerbetrieb"),
+            "abwesend": self.coordinator.away_active(),
+            "abwesenheit": None if not self.coordinator.absence else {
+                k: (v.isoformat() if hasattr(v, "isoformat") else v) for k, v in self.coordinator.absence.items()
+            },
         }
 
 
