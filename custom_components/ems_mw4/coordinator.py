@@ -40,6 +40,7 @@ from .const import (  # noqa: I001
     MIN_ROOMS,
     CAR_SOC_STALE_S,
     CAR_DATA_TIME_ENTITY,
+    VALID_RANGE,
     ROOM_MAX_AGE_S,
     SOURCES,
     STORE_KEY,
@@ -189,6 +190,11 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         data = await self._store.async_load()
         if data and isinstance(data.get("samples"), list):
             self.samples = data["samples"][-MAX_SAMPLES:]
+            for sample in self.samples:  # alte Fehlerwerte aus den Messpunkten entfernen
+                for key, (lo, hi) in VALID_RANGE.items():
+                    v = sample.get(key)
+                    if isinstance(v, (int, float)) and not lo <= v <= hi:
+                        sample[key] = None
         blocks = await self._block_store.async_load()
         if blocks and isinstance(blocks.get("log"), list):
             self.block_log = blocks["log"][-500:]
@@ -266,6 +272,9 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             raw = to_number(state.state) if state is not None else None
             if raw is not None:
                 raw = raw * source.factor
+                bounds = VALID_RANGE.get(source.key)
+                if bounds is not None and not bounds[0] <= raw <= bounds[1]:
+                    raw = None  # Fehlerwert des Geräts, nicht verwenden
             value = self._debounced(source.key, raw) if source.debounce else raw
             data[source.key] = value
             if value is None:

@@ -147,6 +147,8 @@ def heat_days(outdoor: dict[datetime, float], hp_w: dict[datetime, float], since
     temps: dict[date, list[float]] = defaultdict(list)
     power: dict[date, list[float]] = defaultdict(list)
     for when, value in outdoor.items():
+        if not -40.0 <= value <= 50.0:  # Fehlerwerte (z. B. -3276,6 am 29.10.2026) verfälschen sonst die Heizlast
+            continue
         temps[dt_util.as_local(when).date()].append(value)
     for when, value in hp_w.items():
         power[dt_util.as_local(when).date()].append(value)

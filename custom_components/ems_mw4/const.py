@@ -67,6 +67,13 @@ class Source:
     precision: int | None = None
 
 
+# Plausible Bereiche (29.10.2026: die Stiebel meldete per Modbus kurz -3276,6 °C Außentemperatur, Fehlerwert)
+VALID_RANGE: dict[str, tuple[float, float]] = {
+    "outdoor_temp": (-40.0, 50.0),
+    "dhw_temp": (0.0, 95.0),
+    "flow_temp": (0.0, 90.0),
+}
+
 SOURCES: tuple[Source, ...] = (
     Source("pv_power", "PV-Leistung", "sensor.hostname_scb_4fa5bb_sum_power_of_all_pv_dc_inputs", "W", "power", precision=0),
     Source("grid_power", "Netzleistung", "sensor.hostname_scb_4fa5bb_grid_power", "W", "power", precision=0),
