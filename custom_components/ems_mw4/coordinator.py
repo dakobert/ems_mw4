@@ -19,6 +19,8 @@ from dataclasses import replace
 
 # Ohne diese Werte steuert das EMS falsch; nur ihr Fehlen löst eine Push-Meldung aus
 REMIND_FROM_MIN, REMIND_UNTIL_MIN = 18 * 60, 22 * 60 + 30  # Erinnerung ans Anstecken: abends
+REMIND_DAY_FROM_MIN = 7 * 60  # Fahrt noch heute (Roy 31.10.): tagsüber schon früher erinnern
+REMIND_TRIP_AHEAD_H = 6.0  # so lange vor der Abfahrt
 PUSH_KEYS = ("grid_power", "battery_soc", "battery_power", "dhw_temp", "wallbox_power", "price")
 
 from .const import (  # noqa: I001
@@ -138,6 +140,7 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._last_mileage: float | None = None
         self._arrival: datetime | None = None
         self._reminder_sent_for: datetime | None = None
+        self._reminder_trips: set[str] = set()
         self._snooze_until: datetime | None = None
         self._muted_day: Any = None
         self.car_consumption: float = self.params.car_kwh_per_100km
@@ -682,6 +685,8 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if data.get("car_connected") != 0.0 or self._muted_day == now.date():
             return
         minutes = now.hour * 60 + now.minute
+        if REMIND_DAY_FROM_MIN <= minutes < REMIND_UNTIL_MIN and await self._async_trip_reminder(now):
+            return
         if not REMIND_FROM_MIN <= minutes < REMIND_UNTIL_MIN:
             return
         if any(
@@ -709,6 +714,28 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     {"action": ACTION_SKIP, "title": "Heute nicht"},
                 ]},
             })
+
+    async def _async_trip_reminder(self, now: datetime) -> bool:
+        """Fahrt in den nächsten REMIND_TRIP_AHEAD_H Stunden und es fehlt Energie: einmal je Fahrt erinnern,
+        damit vor der Abfahrt noch geladen werden kann (31.10.2026: Abfahrt abends, Abend-Erinnerung zu spät)."""
+        for t in (self.plan or {}).get("trips", []):
+            depart = datetime.fromisoformat(t["abfahrt"])
+            if not now < depart <= now + timedelta(hours=REMIND_TRIP_AHEAD_H):
+                continue
+            key = t["abfahrt"]
+            need = self.charge_needed_kwh(depart)
+            if key in self._reminder_trips or need <= 0:
+                return False
+            self._reminder_trips.add(key)
+            if self.hass.services.has_service("notify", NOTIFY_SERVICE):
+                await self.hass.services.async_call("notify", NOTIFY_SERVICE, {
+                    "title": "EMS MW4: Auto anstecken",
+                    "message": f"Abfahrt {dt_util.as_local(depart):%H:%M} Uhr – es fehlen {need} kWh. "
+                               "Jetzt anstecken, dann ist es rechtzeitig geladen.",
+                    "data": {"actions": [{"action": ACTION_SKIP, "title": "Heute nicht"}]},
+                })
+            return True
+        return False
 
     @callback
     def handle_notification_action(self, event: Any) -> None:

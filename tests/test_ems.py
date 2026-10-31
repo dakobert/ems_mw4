@@ -571,3 +571,31 @@ async def test_charge_reminder_only_in_evening(hass: HomeAssistant) -> None:
         await c._async_reminder()
     await hass.async_block_till_done()
     assert len(calls) == 1 and "15.0 kWh" in calls[0].data["message"]
+
+
+async def test_trip_reminder_same_day(hass: HomeAssistant) -> None:
+    """Roy 31.10.: Abfahrt am selben Abend – Erinnerung schon tagsüber, einmal je Fahrt."""
+    from datetime import datetime as _dt, timedelta as _td
+    from homeassistant.util import dt as dt_util
+    _fill(hass)
+    entry = await _setup(hass)
+    c = entry.runtime_data
+    calls = async_mock_service(hass, "notify", "mobile_app_iphone_von_roy")
+    tz = dt_util.get_default_time_zone()
+    now = _dt(2026, 10, 31, 14, 45, tzinfo=tz)
+    trip = {"abfahrt": now.replace(hour=20, minute=16).isoformat(),
+            "rueckkehr": now.replace(hour=22, minute=51).isoformat(), "fehlt_kwh": 3.1}
+    c.plan = {"trips": [trip]}
+    c.data["car_connected"], c.data["car_soc"] = 0.0, 29.0
+    with patch("custom_components.ems_mw4.coordinator.dt_util.now", return_value=now - _td(hours=2)):
+        await c._async_reminder()  # 12:45: Abfahrt mehr als 6 h entfernt
+    with patch("custom_components.ems_mw4.coordinator.dt_util.now", return_value=now):
+        await c._async_reminder()
+        await c._async_reminder()
+    await hass.async_block_till_done()
+    assert len(calls) == 1 and "20:16" in calls[0].data["message"] and "3.1 kWh" in calls[0].data["message"]
+    c.data["car_connected"] = 1.0
+    with patch("custom_components.ems_mw4.coordinator.dt_util.now", return_value=now + _td(hours=1)):
+        await c._async_reminder()
+    await hass.async_block_till_done()
+    assert len(calls) == 1  # angesteckt: nichts mehr
