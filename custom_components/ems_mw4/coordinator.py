@@ -1023,10 +1023,11 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return a["absenken_ab"] <= now < a["aufheizen_ab"]
 
     def _eff(self, p: Params) -> Params:
-        """Bei Abwesenheit: Raumziel auf away_room_c, Komfortgrundwert 0,5 K darunter, Warmwasser praktisch aus."""
+        """Bei Abwesenheit: Raumziel away_room_c für den kältesten Raum, Komfortgrundwert darüber, Warmwasser praktisch aus."""
         if not self.away_active():
             return p
-        return replace(p, room_target_c=p.away_room_c, heat_comfort_base_c=p.away_room_c - 0.5, dhw_base_c=p.away_dhw_c)
+        return replace(p, room_target_c=p.away_room_c, heat_comfort_base_c=p.away_room_c + p.away_comfort_offset_k,
+                       dhw_base_c=p.away_dhw_c)
 
     def _car_params(self, p: Params) -> Params:
         """Speicher-Vorrang vor dem Auto: im Winter bis 95 %, bei sonnigem Ausblick (Sommer) bis 50 % und

@@ -184,7 +184,9 @@ class Params:
     allday_back_h: float = 17.0
     # Abwesenheit (Roy 26.10.): ab so vielen Nächten am Stück („#übernachtung“) Heizung absenken, Warmwasser aus
     away_min_nights: int = 3
-    away_room_c: float = 17.0  # nicht darunter
+    away_room_c: float = 17.0  # nicht darunter, gilt für den kältesten Raum
+    # Der kälteste Raum liegt ~1,5 K unter den EG-Räumen: Komfortgrundwert bei Abwesenheit daher über dem Raumziel
+    away_comfort_offset_k: float = 1.0
     away_dhw_c: float = 15.0  # Warmwasser praktisch aus; vor der Rückkehr wieder normal mit Hochladung
     away_setback_before_h: float = 12.0  # so lange vor der Abfahrt schon absenken (Restwärme nutzen)
     away_reheat_before_h: float = 36.0  # so lange vor der Rückkehr wieder normal heizen (Fußbodenheizung ist träge)
