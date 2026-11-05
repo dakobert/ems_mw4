@@ -40,6 +40,7 @@ from .const import (  # noqa: I001
     MAX_SAMPLES,
     ROOM_FROZEN_S,
     MIN_ROOMS,
+    ABSENCE_ROOM_SENSORS,
     CAR_SOC_STALE_S,
     CAR_DATA_TIME_ENTITY,
     VALID_RANGE,
@@ -262,6 +263,15 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if value is not None:
                 leads.append((value, minimum))
                 extra += 1
+        if self.away_active():
+            # Abwesenheit: jeder Raum mindestens away_room_c, sonst zählt der kälteste
+            leads, extra = [], 0
+            for entity_id in ABSENCE_ROOM_SENSORS:
+                value = self._room_value(entity_id, now)
+                if value is not None:
+                    leads.append((value, self.params.away_room_c))
+                    if entity_id not in sensors:
+                        extra += 1
         if not values and not leads:
             return None, 0
         return th.room_reference(values, leads), len(values) + extra

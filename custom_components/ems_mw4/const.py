@@ -34,6 +34,16 @@ DEFAULT_ROOM_SENSORS = [
 # Mindesträume (Roy 23.10.2026): Bad OG ist am Verteiler voll offen und bekommt am wenigsten Wärme.
 # Fällt es unter seinen Mindestwert, bestimmt es die Raumreferenz. Die anderen Räume drosselt Roy am Verteiler.
 MIN_ROOMS = {"sensor.temperatursensor_bad_og_temperature": 21.0}
+# Abwesenheit (Roy 05.11.2026): Kein Raum soll unter away_room_c fallen – dann zählt der kälteste aller Räume.
+ABSENCE_ROOM_SENSORS = DEFAULT_ROOM_SENSORS + [
+    "sensor.temperatursensor_bad_og_temperature",
+    "sensor.temperatursensor_buro_temperature",
+    "sensor.temperatursensor_kochen_temperature",
+    "sensor.temperatursensor_wohnen_temperature",
+    "sensor.temperatursensor_schlafzimmer_temperature",
+    "sensor.temperatursensor_gaste_temperature",
+    "sensor.temperatursensor_empfang_temperature",
+]
 # Frühere Vorgaben; eine so gespeicherte Auswahl wird durch die aktuelle ersetzt
 LEGACY_ROOM_SENSORS = [
     [

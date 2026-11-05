@@ -599,3 +599,32 @@ async def test_trip_reminder_same_day(hass: HomeAssistant) -> None:
         await c._async_reminder()
     await hass.async_block_till_done()
     assert len(calls) == 1  # angesteckt: nichts mehr
+
+
+async def test_room_reference_absence_coldest_room(hass: HomeAssistant) -> None:
+    """Abwesenheit (Roy 05.11.2026): kein Raum unter 17 °C – der kälteste aller Räume zählt."""
+    from custom_components.ems_mw4.const import ABSENCE_ROOM_SENSORS
+
+    _fill(hass)
+    entry = await _setup(hass)
+    c = entry.runtime_data
+    for e in ABSENCE_ROOM_SENSORS:
+        hass.states.async_set(e, "18.0")
+    hass.states.async_set("sensor.temperatursensor_schlafzimmer_temperature", "15.7")
+    now = dt_util.utcnow()
+    ref, _ = c._room_temperature(now)
+    assert ref == 18.0  # ohne Abwesenheit zählt das Schlafzimmer nicht
+    local = dt_util.now()
+    c.absence = {
+        "naechte": 5,
+        "abfahrt": local - timedelta(days=1),
+        "rueckkehr": local + timedelta(days=3),
+        "absenken_ab": local - timedelta(days=1),
+        "aufheizen_ab": local + timedelta(days=2),
+    }
+    ref, used = c._room_temperature(now)
+    assert ref == 15.7
+    assert used == len(ABSENCE_ROOM_SENSORS)
+    hass.states.async_set("sensor.temperatursensor_schlafzimmer_temperature", "17.2")
+    ref, _ = c._room_temperature(now)
+    assert ref == 18.0  # alle mindestens 17: wieder Median der Führungsräume
