@@ -647,7 +647,7 @@ def test_absence_from_overnight():
     assert a["abfahrt"] == datetime(2026, 11, 4, 7, 0, tzinfo=tz)
     assert a["rueckkehr"] == datetime(2026, 11, 9, 17, 0, tzinfo=tz)
     assert a["absenken_ab"] == datetime(2026, 11, 3, 19, 0, tzinfo=tz)  # 12 h vorher
-    assert a["aufheizen_ab"] == datetime(2026, 11, 8, 5, 0, tzinfo=tz)  # 36 h vor Rückkehr
+    assert a["aufheizen_ab"] == datetime(2026, 11, 7, 17, 0, tzinfo=tz)  # 48 h vor Rückkehr
     # zwei Nächte (Bielefeld-Art): keine Absenkung
     assert tr.absence([ev("2026-11-04T09:00:00+01:00", "2026-11-04T16:00:00+01:00", desc="#übernachtung"),
                        ev("2026-11-05T09:00:00+01:00", "2026-11-05T16:00:00+01:00", desc="#übernachtung"),

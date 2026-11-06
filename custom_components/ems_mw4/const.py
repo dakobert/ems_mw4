@@ -189,7 +189,9 @@ class Params:
     away_comfort_offset_k: float = 1.0
     away_dhw_c: float = 15.0  # Warmwasser praktisch aus; vor der Rückkehr wieder normal mit Hochladung
     away_setback_before_h: float = 12.0  # so lange vor der Abfahrt schon absenken (Restwärme nutzen)
-    away_reheat_before_h: float = 36.0  # so lange vor der Rückkehr wieder normal heizen (Fußbodenheizung ist träge)
+    # so lange vor der Rückkehr wieder normal heizen (Fußbodenheizung ist träge; 06.11.2026: 36 h reichten für die
+    # am Verteiler gedrosselten Räume nicht sicher, daher 48 h; per Einstellung änderbar)
+    away_reheat_before_h: float = 48.0
     away_min_setback_h: float = 24.0  # kürzer lohnt sich nicht
     trip_min_km: float = 5.0  # näher gelegene Ziele zählen nicht als Fahrt
     car_cheap_below_mean_ct: float = 6.0
@@ -289,6 +291,8 @@ SETTINGS: tuple[Setting, ...] = (
     Setting("trip_buffer_min", "Fahrt: Puffer vor Abfahrt", 0, 60, 5, "min", "mdi:clock-start"),
     Setting("dhw_kwh", "Warmwasser Energie je Ladung", 0.5, 4, 0.1, "kWh", "mdi:water-boiler"),
     Setting("dhw_skip_above_c", "Warmwasser: heute keine Ladung ab", 38, 60, 1, "°C", "mdi:thermometer-water"),
+    Setting("away_room_c", "Abwesenheit: Mindesttemperatur je Raum", 15, 20, 0.5, "°C", "mdi:home-thermometer-outline"),
+    Setting("away_reheat_before_h", "Abwesenheit: normal heizen vor Rückkehr", 12, 168, 6, "h", "mdi:radiator"),
     Setting("heat_limit_c", "Heizgrenze", 10, 20, 0.5, "°C", "mdi:thermometer-lines"),
     Setting("room_target_c", "Raumtemperatur Soll", 18, 24, 0.5, "°C", "mdi:home-thermometer"),
     Setting("heat_comfort_base_c", "Heizung: Komforttemperatur Grundwert", 18, 25, 0.5, "°C", "mdi:thermometer"),
