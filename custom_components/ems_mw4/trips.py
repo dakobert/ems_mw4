@@ -146,7 +146,11 @@ def absence(events: list[dict[str, Any]], now: datetime, p: Params | None = None
         back = day_end.get(home_day) or _day_time(home_day, p.allday_back_h, tz)
         depart = nights[night]
         lower, reheat = depart - timedelta(hours=p.away_setback_before_h), back - timedelta(hours=p.away_reheat_before_h)
-        if reheat <= now or reheat - lower < timedelta(hours=p.away_min_setback_h):
+        # kurze Abwesenheit: mindestens away_min_setback_h absenken, das Wiederaufheizen beginnt dann später
+        # (weniger ausgekühlt); bleibt bis zur Rückkehr nicht genug Zeit, gar nicht absenken
+        reheat = max(reheat, lower + timedelta(hours=p.away_min_setback_h))
+        # bis zur Rückkehr sichtbar bleiben (Aufheiz-Boost braucht die Zeiten)
+        if back <= now or back - reheat < timedelta(hours=p.away_boost_end_before_h):
             continue
         return {"naechte": count, "abfahrt": depart, "rueckkehr": back, "absenken_ab": lower, "aufheizen_ab": reheat}
     return None

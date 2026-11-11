@@ -628,3 +628,25 @@ async def test_room_reference_absence_coldest_room(hass: HomeAssistant) -> None:
     hass.states.async_set("sensor.temperatursensor_schlafzimmer_temperature", "17.2")
     ref, _ = c._room_temperature(now)
     assert ref == 18.0  # alle mindestens 17: wieder Median der Führungsräume
+
+
+async def test_reheat_boost(hass: HomeAssistant) -> None:
+    """Aufheiz-Boost (Roy 09.11.2026): ab Wiederaufheizen, endet nahe Ziel oder 24 h vor Rückkehr, startet nicht neu."""
+    _fill(hass)
+    entry = await _setup(hass)
+    c = entry.runtime_data
+    now = dt_util.now()
+    c.absence = {
+        "naechte": 9, "abfahrt": now - timedelta(days=8), "rueckkehr": now + timedelta(hours=40),
+        "absenken_ab": now - timedelta(days=8, hours=12), "aufheizen_ab": now - timedelta(hours=10),
+    }
+    assert not c.away_active(now)
+    assert c.boost_active(now, room=19.0) is True
+    # 24 h vor Rückkehr ist Schluss
+    assert c.boost_active(now + timedelta(hours=17), room=19.0) is False
+    # fast am Ziel (21 − 0,5): Boost endet und startet nicht neu, auch wenn es wieder kühler wird
+    assert c.boost_active(now, room=20.6) is False
+    assert c.boost_active(now, room=19.0) is False
+    # vor dem Wiederaufheizen kein Boost
+    c._boost_done = None
+    assert c.boost_active(now - timedelta(hours=11), room=19.0) is False

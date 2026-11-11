@@ -189,9 +189,14 @@ class Params:
     away_comfort_offset_k: float = 1.0
     away_dhw_c: float = 15.0  # Warmwasser praktisch aus; vor der Rückkehr wieder normal mit Hochladung
     away_setback_before_h: float = 12.0  # so lange vor der Abfahrt schon absenken (Restwärme nutzen)
-    # so lange vor der Rückkehr wieder normal heizen (Fußbodenheizung ist träge; 06.11.2026: 36 h reichten für die
-    # am Verteiler gedrosselten Räume nicht sicher, daher 48 h; per Einstellung änderbar)
-    away_reheat_before_h: float = 48.0
+    # so lange vor der Rückkehr wieder heizen (Fußbodenheizung ist träge; 06.–10.11.2026: die am Verteiler gedrosselten
+    # Räume brauchten bei ~5 °C außen 3–4 Tage). 72 h, davon die ersten 48 h mit Aufheiz-Boost.
+    away_reheat_before_h: float = 72.0
+    # Aufheiz-Boost (Roy 09.11.2026): volle Anhebung ab Wiederaufheizen; endet, sobald die Referenz das Raumziel bis auf
+    # away_boost_margin_k erreicht, spätestens away_boost_end_before_h vor der Rückkehr (Estrich heizt nach)
+    away_boost_k: float = 2.5
+    away_boost_end_before_h: float = 24.0
+    away_boost_margin_k: float = 0.5
     away_min_setback_h: float = 24.0  # kürzer lohnt sich nicht
     trip_min_km: float = 5.0  # näher gelegene Ziele zählen nicht als Fahrt
     car_cheap_below_mean_ct: float = 6.0
@@ -293,6 +298,8 @@ SETTINGS: tuple[Setting, ...] = (
     Setting("dhw_skip_above_c", "Warmwasser: heute keine Ladung ab", 38, 60, 1, "°C", "mdi:thermometer-water"),
     Setting("away_room_c", "Abwesenheit: Mindesttemperatur je Raum", 15, 20, 0.5, "°C", "mdi:home-thermometer-outline"),
     Setting("away_reheat_before_h", "Abwesenheit: normal heizen vor Rückkehr", 12, 168, 6, "h", "mdi:radiator"),
+    Setting("away_boost_k", "Abwesenheit: Anhebung beim Aufheizen", 0, 4, 0.5, "K", "mdi:arrow-up-bold-circle"),
+    Setting("away_boost_end_before_h", "Abwesenheit: Boost endet vor Rückkehr", 6, 72, 6, "h", "mdi:timer-off"),
     Setting("heat_limit_c", "Heizgrenze", 10, 20, 0.5, "°C", "mdi:thermometer-lines"),
     Setting("room_target_c", "Raumtemperatur Soll", 18, 24, 0.5, "°C", "mdi:home-thermometer"),
     Setting("heat_comfort_base_c", "Heizung: Komforttemperatur Grundwert", 18, 25, 0.5, "°C", "mdi:thermometer"),

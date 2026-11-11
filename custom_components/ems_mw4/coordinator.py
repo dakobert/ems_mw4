@@ -166,6 +166,8 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._car_soc_seen: tuple[float, datetime, bool] | None = None
         self.absence: dict[str, Any] | None = None
         self._absence_cancelled: datetime | None = None
+        self._boost_done: datetime | None = None  # Rückkehrzeit, für die der Aufheiz-Boost schon beendet ist
+        self._boost_was_active = False
         self.intent: dict[str, Any] = {"grund": "noch nicht gerechnet"}
         self.last_written: dict[str, Any] = {}
         self._psm_changes: list[datetime] = []
@@ -811,6 +813,13 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             (self.data or {}).get(KEY_ROOM_TEMP), th.room_slope(self.samples, now, 12),
             th.outdoor_past_mean(self.samples, now, 24), temps[: int(p.heat_lookahead_h * 4)], p, cold_ahead,
         )
+        boost = self.boost_active(room=(self.data or {}).get(KEY_ROOM_TEMP))
+        if boost:
+            adv["shift_k"] = max(adv["shift_k"], self.params.away_boost_k)
+            adv["grund"] = "Aufheizen nach Abwesenheit (Boost)"
+        if boost != self._boost_was_active:
+            self._comfort_written_at = None  # Boost-Wechsel sofort schreiben, nicht 3 h warten
+            self._boost_was_active = boost
         curve = self._number(CONF_HEAT_CURVE)
         recent = self.samples[-3 * 96 :]
         steady = bool(recent) and all(s.get("heat_curve") == curve for s in recent)
@@ -819,6 +828,7 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         adv.update({
             "comfort_target_c": round(p.heat_comfort_base_c + adv["shift_k"], 1),
             "abwesend": self.away_active(),
+            "aufheiz_boost": boost,
             "comfort_now_c": self._number(CONF_COMFORT_TEMP),
             "curve_now": curve,
             "curve_target": th.curve_target(curve, history, p) if steady else None,
@@ -873,7 +883,7 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         connected = (self.data or {}).get("car_connected")
         if connected == 1.0 and getattr(self, "_last_connected", None) == 0.0:
             # früher zurück: Anstecken zu Hause nach der Abfahrt beendet die Abwesenheit
-            if self.absence and self.absence["abfahrt"] <= dt_util.now() < self.absence["aufheizen_ab"]:
+            if self.absence and self.absence["abfahrt"] <= dt_util.now() < self.absence["rueckkehr"]:
                 self._absence_cancelled = self.absence["rueckkehr"]
             self.hass.async_create_task(self.async_replan())
         self._last_connected = connected
@@ -1021,6 +1031,25 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if self._absence_cancelled is not None and self._absence_cancelled == a["rueckkehr"]:
             return False
         return a["absenken_ab"] <= now < a["aufheizen_ab"]
+
+    def boost_active(self, now: datetime | None = None, room: float | None = None) -> bool:
+        """Aufheiz-Boost nach Abwesenheit: ab Wiederaufheizen, bis die Referenz fast am Ziel ist,
+        spätestens away_boost_end_before_h vor der Rückkehr. Einmal beendet, startet er nicht neu."""
+        a, p = self.absence, self.params
+        if not a or p.away_boost_k <= 0:
+            return False
+        if self._absence_cancelled is not None and self._absence_cancelled == a["rueckkehr"]:
+            return False
+        if self._boost_done is not None and self._boost_done == a["rueckkehr"]:
+            return False
+        now = now or dt_util.now()
+        end = a["rueckkehr"] - timedelta(hours=p.away_boost_end_before_h)
+        if not a["aufheizen_ab"] <= now < end:
+            return False
+        if room is not None and room >= p.room_target_c - p.away_boost_margin_k:
+            self._boost_done = a["rueckkehr"]
+            return False
+        return True
 
     def _eff(self, p: Params) -> Params:
         """Bei Abwesenheit: Raumziel away_room_c für den kältesten Raum, Komfortgrundwert darüber, Warmwasser praktisch aus."""
