@@ -222,8 +222,9 @@ class Params:
     heat_early_room_margin_c: float = 0.0  # Vorab-Anhebung nur, solange der Raum voraussichtlich nicht über Soll liegt
     heat_days_gain: float = 0.2  # K Anhebung je K, das es kälter wird
     heat_shift_gain: float = 1.5
-    heat_shift_max_k: float = 3.0
+    heat_shift_max_k: float = 4.0  # Modell (0.24) wählt selbst; bei 0 °C außen braucht es ~24,5
     heat_shift_min_k: float = 1.0
+    heat_model_down_k: float = 2.0  # Modell darf so weit unter den Grundwert gehen (früh zurücknehmen)
     heat_curve_min: float = 0.35
     heat_curve_max: float = 0.50
 
@@ -260,6 +261,7 @@ CONF_DHW_TARGETS = (
 CONF_HEAT_CURVE = "number.stiebel_eltron_isg_heating_curve_rise_hk1"
 CONF_SUMMER_MODE = "binary_sensor.stiebel_eltron_isg_is_in_summer_mode"
 COMFORT_WRITE_GAP_S = 3 * 3600
+RESPONSE_FIT_GAP_S = 6 * 3600  # Trägheitsmodell alle 6 Stunden neu lernen
 CONF_TRIP_CALENDAR = "calendar.roy_conbus"
 CONF_ROUTE_DISTANCE = "sensor.here_travel_time_entfernung"
 CONF_ROUTE_DURATION = "sensor.here_travel_time_dauer"

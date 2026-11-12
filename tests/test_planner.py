@@ -663,3 +663,37 @@ def test_absence_from_overnight():
     # während des Wiederaufheizens noch sichtbar (Aufheiz-Boost), nach der Rückkehr nicht mehr
     assert tr.absence([ev("2026-11-04", "2026-11-10", "Urlaub #übernachtung")], datetime(2026, 11, 8, 6, 0, tzinfo=tz), P) is not None
     assert tr.absence([ev("2026-11-04", "2026-11-10", "Urlaub #übernachtung")], datetime(2026, 11, 9, 18, 0, tzinfo=tz), P) is None
+
+
+def test_response_model_and_plan() -> None:
+    """Trägheitsmodell (Roy 12.11.2026): lernt Ansprechen aus Messdaten und plant vorausschauend."""
+    from datetime import datetime, timedelta, timezone
+    import math
+
+    from custom_components.ems_mw4 import thermal as th
+    from custom_components.ems_mw4.const import Params
+
+    a, b, g = 0.025, 0.009, 0.1
+    t0 = datetime(2026, 11, 1, tzinfo=timezone.utc)
+    samples, room = [], 20.0
+    for h in range(24 * 12):
+        out = 6 + 4 * math.sin(h / 24 * 2 * math.pi)
+        comfort = 21.0 + (1.5 if (h // 30) % 2 else 0.0)  # Sprünge, damit das Ansprechen sichtbar wird
+        for q in range(4):
+            samples.append({"t": (t0 + timedelta(hours=h, minutes=15 * q)).isoformat(), "room_temp": room,
+                            "outdoor_temp": out, "heat_comfort": comfort})
+        room = room + a * (comfort - room) + b * (out - room) + g
+    series = th.hourly_series(samples, t0 + timedelta(days=12))
+    model = th.fit_response(series)
+    assert model["gueltig"] and model["fehler_24h_k"] < 0.1
+    assert abs(model["a"] - a) < 0.006 and model["verzoegerung_h"] == 0
+    # Gleichgewicht: kälter draußen → höherer Komfort
+    assert th.comfort_for(model, 21, 0) > th.comfort_for(model, 21, 10)
+    p = Params()
+    warm = th.plan_comfort(model, 20.8, [], [10.0] * 36, p, 18.5, 24.5)
+    cold = th.plan_comfort(model, 20.8, [], [0.0] * 36, p, 18.5, 24.5)
+    assert cold["comfort_c"] > warm["comfort_c"]
+    # Raum schon zu warm: früh zurücknehmen, Prognose bleibt unter Ziel + Band
+    hot = th.plan_comfort(model, 21.6, [], [6.0] * 36, p, 18.5, 24.5)
+    assert hot["comfort_c"] < th.comfort_for(model, 21, 6)
+    assert hot["raum_max_c"] <= 21.6

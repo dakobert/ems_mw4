@@ -231,3 +231,137 @@ def sunny_tomorrow(slots: list, pv_kw: list[float], load_kw: list[float], tomorr
     pv = sum(v for s, v in zip(slots, pv_kw) if s.date() == tomorrow) * 0.25
     load = sum(v for s, v in zip(slots, load_kw) if s.date() == tomorrow) * 0.25
     return pv > 0 and pv - load >= battery_kwh
+
+
+# ---------- Gelerntes Trägheitsmodell (Roy 12.11.2026) ----------
+# Ein-Speicher-Modell je Stunde: T[t+1] = T[t] + a·(Komfort[t−L] − T[t]) + b·(Außen[t] − T[t]) + g
+#   a: wie schnell der Raum der Komforttemperatur folgt, b: Auskühlen nach außen, g: Rest (Sonne, Geräte),
+#   L: Totzeit in Stunden. Gelernt wird über den Fehler echter 24-h-Vorhersagen, nicht über Stundenschritte –
+#   die Fußbodenheizung ist träge, deshalb zählt, wo der Raum nach einem Tag steht.
+# Messung 03.–12.11.2026 (Wohnzimmer): a 0,025, b 0,009, g 0,1, L 0 → Zeitkonstante ~29 h, 24-h-Fehler 0,13 K.
+# Für 21 °C braucht es Komfort ≈ 21 bei 10 °C außen, ≈ 23 bei 4 °C, ≈ 24,5 bei 0 °C.
+
+RESP_H = 24  # Vorhersagehorizont für das Lernen
+RESP_MAX_DAYS = 30
+RESP_MIN_WINDOWS = 40  # ~5 Tage zusammenhängender Daten
+RESP_MAX_ERR_K = 0.35  # schlechter: Modell nicht verwenden
+# 05.11. 16 Uhr bis 06.11. 11 Uhr (MEZ) galt der kälteste Raum als Referenz – nicht vergleichbar
+RESP_SKIP = [(datetime.fromisoformat("2026-11-05T15:00:00+00:00"), datetime.fromisoformat("2026-11-06T10:00:00+00:00"))]
+
+
+def hourly_series(samples: list[dict[str, Any]], now: datetime, days: float = RESP_MAX_DAYS) -> list[dict[str, Any]]:
+    """15-Minuten-Messpunkte zu Stundenmitteln (Raum, Außen, Komfort). Stunden mit Lücken oder Abwesenheit fallen weg."""
+    start = now - timedelta(days=days)
+    buckets: dict[datetime, list[dict[str, Any]]] = {}
+    for s in samples:
+        try:
+            t = datetime.fromisoformat(s["t"])
+        except (KeyError, ValueError):
+            continue
+        if t < start or any(a <= t < b for a, b in RESP_SKIP):
+            continue
+        buckets.setdefault(t.replace(minute=0, second=0, microsecond=0), []).append(s)
+    out = []
+    for hour in sorted(buckets):
+        chunk = buckets[hour]
+        if len(chunk) < 3 or any(s.get("away") for s in chunk):
+            continue
+        vals = {}
+        for key, name in (("room_temp", "room"), ("outdoor_temp", "out"), ("heat_comfort", "comfort")):
+            v = [float(s[key]) for s in chunk if s.get(key) is not None]
+            if len(v) < 3:
+                break
+            vals[name] = sum(v) / len(v)
+        else:
+            out.append({"t": hour, **vals})
+    return out
+
+
+def fit_response(series: list[dict[str, Any]]) -> dict[str, Any]:
+    """Trägheitsmodell aus Stundenwerten lernen (Gittersuche über den Fehler der 24-h-Vorhersage)."""
+    import numpy as np
+
+    res: dict[str, Any] = {"gueltig": False, "fenster": 0}
+    if len(series) < RESP_H * 3:
+        return res
+    # zusammenhängende Stunden indizieren
+    t0 = series[0]["t"]
+    n = int((series[-1]["t"] - t0).total_seconds() // 3600) + 1
+    room = np.full(n, np.nan)
+    out = np.full(n, np.nan)
+    com = np.full(n, np.nan)
+    for row in series:
+        i = int((row["t"] - t0).total_seconds() // 3600)
+        room[i], out[i], com[i] = row["room"], row["out"], row["comfort"]
+    best = None
+    for lag in range(0, 7):
+        starts = [s for s in range(lag, n - RESP_H, 3)
+                  if not np.isnan(room[s:s + RESP_H + 1]).any() and not np.isnan(out[s:s + RESP_H]).any()
+                  and not np.isnan(com[s - lag:s - lag + RESP_H]).any()]
+        if len(starts) < RESP_MIN_WINDOWS:
+            continue
+        st = np.array(starts)
+        target = room[st + RESP_H]
+        for a in np.linspace(0.005, 0.08, 16):
+            for b in np.linspace(0.0, 0.03, 11):
+                for g in np.linspace(-0.1, 0.2, 16):
+                    x = room[st].copy()
+                    for k in range(RESP_H):
+                        x = x + a * (com[st + k - lag] - x) + b * (out[st + k] - x) + g
+                    err = float(np.abs(x - target).mean())
+                    if best is None or err < best[0]:
+                        best = (err, float(a), float(b), float(g), lag, len(starts))
+    if best is None:
+        return res
+    err, a, b, g, lag, windows = best
+    res.update({
+        "a": round(a, 4), "b": round(b, 4), "g": round(g, 4), "verzoegerung_h": lag, "fenster": windows,
+        "fehler_24h_k": round(err, 3), "zeitkonstante_h": round(1.0 / (a + b), 1) if a + b > 0 else None,
+    })
+    res["gueltig"] = a >= 0.008 and err <= RESP_MAX_ERR_K
+    return res
+
+
+def comfort_for(model: dict[str, Any], room_target: float, outdoor: float) -> float | None:
+    """Komforttemperatur, bei der sich der Raum auf Dauer bei room_target einpendelt."""
+    if not model.get("gueltig"):
+        return None
+    a, b, g = model["a"], model["b"], model["g"]
+    return round(((a + b) * room_target - b * outdoor - g) / a, 2)
+
+
+def plan_comfort(
+    model: dict[str, Any], room_now: float, comfort_past: list[float], out_ahead: list[float],
+    p: Params, c_min: float, c_max: float, horizon_h: int = 36,
+) -> dict[str, Any] | None:
+    """Komforttemperatur so wählen, dass der Raum über die nächsten Stunden möglichst am Ziel liegt.
+
+    Simuliert jede Stufe (0,5 K) mit der Wetterprognose. Bestraft wird die Abweichung vom Ziel und besonders
+    jedes Überschreiten von Ziel + Band: so wird früh zurückgenommen, bevor der Estrich überheizt, und früh
+    angehoben, bevor eine kalte Nacht kommt.
+    """
+    if not model.get("gueltig") or room_now is None or not out_ahead:
+        return None
+    a, b, g, lag = model["a"], model["b"], model["g"], int(model["verzoegerung_h"])
+    target, upper = p.room_target_c, p.room_target_c + p.room_band_up_c
+    outs = (list(out_ahead) + [out_ahead[-1]] * horizon_h)[:horizon_h]
+    past = list(comfort_past)[-lag:] if lag else []
+    best = None
+    c = c_min
+    while c <= c_max + 1e-9:
+        x, traj = room_now, []
+        for k in range(horizon_h):
+            ck = past[k] if k < len(past) else c
+            x = x + a * (ck - x) + b * (outs[k] - x) + g
+            traj.append(x)
+        cost = 0.0
+        for k, v in enumerate(traj):
+            w = 1.0 if k >= 6 else 0.3  # die ersten Stunden sind ohnehin kaum zu ändern
+            cost += w * (v - target) ** 2 + 10.0 * max(0.0, v - upper) ** 2
+        cost += 0.001 * (c - c_min)  # bei Gleichstand die sparsamere Stufe
+        if best is None or cost < best[0]:
+            best = (cost, c, traj)
+        c = round(c + 0.5, 1)
+    _, c, traj = best
+    return {"comfort_c": c, "raum_24h_c": round(traj[min(23, len(traj) - 1)], 2),
+            "raum_max_c": round(max(traj), 2), "raum_min_c": round(min(traj), 2)}

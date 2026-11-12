@@ -57,7 +57,7 @@ from .const import (  # noqa: E402
     CONF_DHW_TARGETS, HEAT_DATA_FROM, CONF_GOE_AMP, CONF_GOE_FRC, CONF_GOE_PSM, CONF_SG_INPUT_1, CONF_SG_INPUT_2, MODBUS_BATTERY_SETPOINT,
     MODBUS_HUB, MODBUS_SLAVE, PLAN_MAX_AGE_S, SWITCH_BATTERY, SWITCH_DHW, SWITCH_MASTER, SWITCH_WALLBOX,
     BLOCK_LOG_STORE_KEY, NOTIFY_SERVICE, SWITCH_HEATING, SWITCH_HEAT_BLOCK, SWITCH_QUIET,
-    SWITCH_PROACTIVE, SWITCH_CURVE, SWITCH_CAR_NOW, CONF_COMFORT_TEMP, CONF_HEAT_CURVE, CONF_SUMMER_MODE, COMFORT_WRITE_GAP_S,
+    SWITCH_PROACTIVE, SWITCH_CURVE, SWITCH_CAR_NOW, CONF_COMFORT_TEMP, CONF_HEAT_CURVE, CONF_SUMMER_MODE, COMFORT_WRITE_GAP_S, RESPONSE_FIT_GAP_S,
 )
 from . import thermal as th  # noqa: E402
 from . import trips as tr  # noqa: E402
@@ -150,6 +150,8 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.dhw_hot: dict[str, Any] = {"letzte": None, "tage_her": None, "faellig": False}
         self._dhw_warned: Any = None
         self.house_model: dict[str, Any] = {"fenster": 0, "gueltig": False}
+        self.response_model: dict[str, Any] = {"fenster": 0, "gueltig": False}
+        self._response_fit_at: datetime | None = None
         self.proactive: dict[str, Any] = {"shift_k": 0.0, "grund": "noch nicht gerechnet"}
         self._comfort_written_at: datetime | None = None
         self._comfort_touched = False
@@ -321,6 +323,7 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         sample["heat_shift"] = self.proactive.get("shift_k")
         sample["heat_curve"] = self._number(CONF_HEAT_CURVE)
         sample["heat_comfort"] = self._number(CONF_COMFORT_TEMP)
+        sample["away"] = self.away_active() or None
         i = self.plan_index()
         if i is not None:
             for key, name in (("grid_kw", "plan_grid_kw"), ("battery_kw", "plan_battery_kw"), ("soc", "plan_soc"),
@@ -495,6 +498,11 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if isinstance(plan.get("car"), dict):
             plan["car"]["ab_speicher_soc"] = self._car_params(self.params).car_after_battery_soc
         daily = await ems_data.async_fetch_daily_means(self.hass, weather)
+        if self._response_fit_at is None or (now - self._response_fit_at).total_seconds() >= RESPONSE_FIT_GAP_S:
+            # Trägheitsmodell neu lernen (Roy 12.11.2026: den ganzen Winter weiterlernen)
+            series = th.hourly_series(self.samples, dt_util.utcnow())
+            self.response_model = await self.hass.async_add_executor_job(th.fit_response, series)
+            self._response_fit_at = now
         self._update_proactive(temps, th.coldest_day(daily, now.date(), self.params.heat_days_ahead))
         self.plan, self.plan_time = plan, now
         self._record_forecast(now, plan)
@@ -813,6 +821,25 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             (self.data or {}).get(KEY_ROOM_TEMP), th.room_slope(self.samples, now, 12),
             th.outdoor_past_mean(self.samples, now, 24), temps[: int(p.heat_lookahead_h * 4)], p, cold_ahead,
         )
+        model_plan = None
+        room_now = (self.data or {}).get(KEY_ROOM_TEMP)
+        if not self.away_active() and self.response_model.get("gueltig") and room_now is not None:
+            out_h = [v for v in (
+                th._mean([t for t in temps[i:i + 4] if t is not None]) for i in range(0, min(len(temps), 48 * 4), 4)
+            ) if v is not None]
+            lag = int(self.response_model.get("verzoegerung_h") or 0)
+            past = [s.get("heat_comfort") for s in self.samples[-lag * 4:]][::4] if lag else []
+            current = self._number(CONF_COMFORT_TEMP)
+            past = [v if v is not None else current for v in past]
+            model_plan = th.plan_comfort(
+                self.response_model, room_now, past, out_h, p,
+                p.heat_comfort_base_c - p.heat_model_down_k, p.heat_comfort_base_c + p.heat_shift_max_k,
+            )
+            if model_plan is not None:
+                adv["shift_k"] = round(model_plan["comfort_c"] - p.heat_comfort_base_c, 1)
+                adv["predicted_c"] = model_plan["raum_24h_c"]
+                adv["grund"] = (f"Modell: Raum in 24 h {model_plan['raum_24h_c']:.1f} °C, "
+                                f"höchstens {model_plan['raum_max_c']:.1f} °C")
         boost = self.boost_active(room=(self.data or {}).get(KEY_ROOM_TEMP))
         if boost:
             adv["shift_k"] = max(adv["shift_k"], self.params.away_boost_k)
@@ -829,6 +856,8 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "comfort_target_c": round(p.heat_comfort_base_c + adv["shift_k"], 1),
             "abwesend": self.away_active(),
             "aufheiz_boost": boost,
+            "modell": dict(self.response_model),
+            "modell_plan": model_plan,
             "comfort_now_c": self._number(CONF_COMFORT_TEMP),
             "curve_now": curve,
             "curve_target": th.curve_target(curve, history, p) if steady else None,
