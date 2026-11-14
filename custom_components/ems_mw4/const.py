@@ -14,6 +14,7 @@ STORE_KEY = f"{DOMAIN}.messreihe"
 MAX_SAMPLES = 120 * 96  # 120 Tage im 15-Minuten-Raster
 ROOM_MAX_AGE_S = 3 * 3600
 ROOM_FROZEN_S = 4 * 3600  # so lange exakt derselbe Wert: Fühler gilt als stumm
+ROOM_FROZEN_SEEN_S = 36 * 3600  # Gerät lebt (last_seen frisch), Wert trotzdem so lange gleich: verdächtig
 # Auto-Ladestand gilt als veraltet, wenn das Auto so lange nichts meldet (BMW-Störung 23.–25.10.2026)
 CAR_SOC_STALE_S = 6 * 3600
 # Zeitpunkt des letzten erfolgreichen Abrufs bei BMW (CarData), sonst zählt der Ladestand-Sensor selbst

@@ -39,6 +39,7 @@ from .const import (  # noqa: I001
     KEY_SOURCES_OK,
     MAX_SAMPLES,
     ROOM_FROZEN_S,
+    ROOM_FROZEN_SEEN_S,
     MIN_ROOMS,
     ABSENCE_ROOM_SENSORS,
     CAR_SOC_STALE_S,
@@ -239,16 +240,38 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         value = to_number(state.state)
         if value is None:
             return None
-        if (now - state.last_reported).total_seconds() > ROOM_MAX_AGE_S:
+        # Zigbee-Fühler melden nur bei Änderung. In einem ruhigen Raum bleibt der Wert daher viele
+        # Stunden gleich (14.11.2026: Wohnzimmer 13 h, Flur 22 h), obwohl das Gerät lebt. Gibt es einen
+        # „last_seen“-Sensor des Geräts, entscheidet der über Lebendigkeit; gleicher Wert erst nach
+        # ROOM_FROZEN_SEEN_S verdächtig.
+        alive = self._room_last_seen_ok(entity_id, now)
+        if alive is False:
+            return None
+        if alive is None and (now - state.last_reported).total_seconds() > ROOM_MAX_AGE_S:
             return None
         # Ein Neustart spielt den letzten Wert mit neuem Zeitstempel zurück (08.10.2026: zwei Fühler
         # seit Mittag stumm). Deshalb zusätzlich: Wert seit Stunden unverändert = Fühler gilt als stumm.
+        limit = ROOM_FROZEN_SEEN_S if alive else ROOM_FROZEN_S
         seen = self._room_seen.get(entity_id)
         if seen is None or seen[0] != value:
             self._room_seen[entity_id] = (value, now)
-        elif (now - seen[1]).total_seconds() > ROOM_FROZEN_S:
+        elif (now - seen[1]).total_seconds() > limit:
             return None
         return value
+
+    def _room_last_seen_ok(self, entity_id: str, now: datetime) -> bool | None:
+        """True/False aus dem last_seen-Sensor des Geräts, None wenn es keinen gibt."""
+        if not entity_id.endswith("_temperature"):
+            return None
+        state = self.hass.states.get(entity_id[: -len("_temperature")] + "_last_seen")
+        if state is None:
+            return None
+        seen = dt_util.parse_datetime(state.state) if isinstance(state.state, str) else None
+        if seen is None:
+            return None
+        if seen.tzinfo is None:
+            seen = seen.replace(tzinfo=dt_util.UTC)
+        return (now - seen).total_seconds() <= ROOM_MAX_AGE_S
 
     def _room_temperature(self, now: datetime) -> tuple[float | None, int]:
         sensors = self.room_sensors

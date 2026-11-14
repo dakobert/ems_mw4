@@ -509,6 +509,27 @@ async def test_room_frozen_sensor_dropped(hass: HomeAssistant) -> None:
     assert used == 4
 
 
+async def test_room_stable_value_alive_by_last_seen(hass: HomeAssistant) -> None:
+    _fill(hass)
+    entry = await _setup(hass)
+    c = entry.runtime_data
+    now = dt_util.utcnow()
+    first = DEFAULT_ROOM_SENSORS[0]
+    seen_id = first[: -len("_temperature")] + "_last_seen"
+    c._room_temperature(now)
+    # ruhiger Raum: Wert seit 13 h gleich, Gerät aber vor 5 min gesehen → zählt
+    c._room_seen[first] = (c._room_seen[first][0], now - timedelta(hours=13))
+    hass.states.async_set(seen_id, (now - timedelta(minutes=5)).isoformat())
+    assert c._room_value(first, now) is not None
+    # Gerät seit 5 h nicht gesehen → fällt heraus
+    hass.states.async_set(seen_id, (now - timedelta(hours=5)).isoformat())
+    assert c._room_value(first, now) is None
+    # gesehen, aber Wert seit 40 h gleich → verdächtig
+    hass.states.async_set(seen_id, (now - timedelta(minutes=5)).isoformat())
+    c._room_seen[first] = (c._room_seen[first][0], now - timedelta(hours=40))
+    assert c._room_value(first, now) is None
+
+
 def test_room_reference() -> None:
     from custom_components.ems_mw4.thermal import room_reference
     wz = lambda v: (v, 20.5)  # noqa: E731
