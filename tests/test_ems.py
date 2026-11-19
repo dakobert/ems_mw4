@@ -671,3 +671,25 @@ async def test_reheat_boost(hass: HomeAssistant) -> None:
     # vor dem Wiederaufheizen kein Boost
     c._boost_done = None
     assert c.boost_active(now - timedelta(hours=11), room=19.0) is False
+
+
+async def test_room_frozen_temp_and_humidity(hass: HomeAssistant) -> None:
+    """Temperatur und Feuchte seit über 8 h gleich bei frischem last_seen: Messung hängt (19.11.2026)."""
+    _fill(hass)
+    entry = await _setup(hass)
+    c = entry.runtime_data
+    now = dt_util.utcnow()
+    first = DEFAULT_ROOM_SENSORS[0]
+    base = first[: -len("_temperature")]
+    hass.states.async_set(base + "_last_seen", (now - timedelta(minutes=2)).isoformat())
+    hass.states.async_set(base + "_humidity", "41.5")
+    assert c._room_value(first, now) is not None
+    # 9 h später: beides unverändert -> hängt
+    later = now + timedelta(hours=9)
+    hass.states.async_set(base + "_last_seen", later.isoformat())
+    assert c._room_value(first, later) is None
+    assert first in c.rooms_frozen
+    # Feuchte bewegt sich, Temperatur ruht -> ruhiger Raum, zählt wieder
+    hass.states.async_set(base + "_humidity", "41.0")
+    assert c._room_value(first, later) is not None
+    assert first not in c.rooms_frozen

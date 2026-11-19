@@ -86,6 +86,7 @@ class EmsRoomSensor(EmsBaseSensor):
         return {
             "fuehler": self.coordinator.room_sensors,
             "fuehler_gueltig": self.coordinator.data.get("room_sensors_used"),
+            "fuehler_haengen": dict(self.coordinator.rooms_frozen),
         }
 
 
