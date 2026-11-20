@@ -475,6 +475,15 @@ def test_trip_chain_allday_multiday_overnight():
     assert len(tr.build_trips(tr.parse_events(two_days, now), routes, P)) == 1
     two_days[1]["summary"] = "A"  # ohne Markierung: zwei Tagesfahrten
     assert len(tr.build_trips(tr.parse_events(two_days, now), routes, P)) == 2
+    # Schreibweise „#übernachten“ (Roy 20.11.) zählt ebenso
+    two_days[0]["description"] = "#übernachten"
+    assert len(tr.build_trips(tr.parse_events(two_days, now), routes, P)) == 1
+    assert tr.is_overnight("x #Uebernachtung") and not tr.is_overnight("übernachten ohne Raute")
+    # laufende Fahrt (Abfahrt vorbei, Rückkehr offen) erscheint als „unterwegs“
+    during = datetime(2026, 10, 5, 20, 0, tzinfo=tz)
+    on = tr.ongoing_trips(tr.parse_events(two_days, now), routes, during, P)
+    assert len(on) == 1 and on[0]["rueckkehr"].startswith("2026-10-06")
+    assert tr.ongoing_trips(tr.parse_events(two_days, now), routes, datetime(2026, 10, 7, 9, 0, tzinfo=tz), P) == []
     # ohne Koordinaten und ohne Postleitzahl: keine Fahrt; später als das Planfenster: Liste
     assert tr.parse_events([ev("2026-10-05", "2026-10-06", "Dresden", None)], now) == []
     slots = [now + timedelta(minutes=15 * i) for i in range(192)]

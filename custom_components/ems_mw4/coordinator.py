@@ -58,7 +58,7 @@ from . import executor as ex
 from .const import (  # noqa: E402
     CONF_DHW_TARGETS, HEAT_DATA_FROM, CONF_GOE_AMP, CONF_GOE_FRC, CONF_GOE_PSM, CONF_SG_INPUT_1, CONF_SG_INPUT_2, MODBUS_BATTERY_SETPOINT,
     MODBUS_HUB, MODBUS_SLAVE, PLAN_MAX_AGE_S, SWITCH_BATTERY, SWITCH_DHW, SWITCH_MASTER, SWITCH_WALLBOX,
-    BLOCK_LOG_STORE_KEY, NOTIFY_SERVICE, SWITCH_HEATING, SWITCH_HEAT_BLOCK, SWITCH_QUIET,
+    BLOCK_LOG_STORE_KEY, CONF_PERSON, NOTIFY_SERVICE, SWITCH_HEATING, SWITCH_HEAT_BLOCK, SWITCH_QUIET,
     SWITCH_PROACTIVE, SWITCH_CURVE, SWITCH_CAR_NOW, CONF_COMFORT_TEMP, CONF_HEAT_CURVE, CONF_SUMMER_MODE, COMFORT_WRITE_GAP_S, RESPONSE_FIT_GAP_S,
 )
 from . import thermal as th  # noqa: E402
@@ -140,6 +140,7 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._routes_loaded = False
         self.trip_destination: str | None = None
         self.trips: list[dict[str, Any]] = []
+        self.ongoing_trips: list[dict[str, Any]] = []
         self.trip_status: str = "noch nicht gelesen"
         self.trip_shapes: list[dict[str, Any]] = []
         self.later_trips: list[dict[str, Any]] = []
@@ -669,7 +670,7 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self.routes = (await self._route_store.async_load() or {}).get("routes", {})
             self._routes_loaded = True
         if self.hass.states.get(CONF_TRIP_CALENDAR) is None or not self.hass.services.has_service("calendar", "get_events"):
-            self.trips, self.trip_status = [], "Kalender nicht verfügbar"
+            self.trips, self.ongoing_trips, self.trip_status = [], [], "Kalender nicht verfügbar"
             return []
         events = await self._async_events_direct(now)
         source = "volle Adressen"
@@ -702,6 +703,7 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         learned = replace(self.params, car_kwh_per_100km=self.car_consumption)
         self.trips = tr.with_routes(found, self.routes, slots, learned)
         self.later_trips = tr.later_trips(found, self.routes, slots, learned)
+        self.ongoing_trips = tr.ongoing_trips(found, self.routes, now, learned)
         missing = len({t["address"] for t in found if t["address"] not in self.routes})
         self.trip_status = (
             f"{len(found)} Termine mit Adresse" + (f", {missing} ohne Strecke" if missing else "") + f" ({source})"
@@ -777,16 +779,13 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         data = self.data or {}
         if data.get("car_connected") != 0.0 or self._muted_day == now.date():
             return
+        if self._away_from_home(now):
+            return  # nicht zu Hause oder Fahrt läuft: Anstecken geht gerade nicht (Roy 20.11.2026)
         minutes = now.hour * 60 + now.minute
         if REMIND_DAY_FROM_MIN <= minutes < REMIND_UNTIL_MIN and await self._async_trip_reminder(now):
             return
         if not REMIND_FROM_MIN <= minutes < REMIND_UNTIL_MIN:
             return
-        if any(
-            datetime.fromisoformat(t["abfahrt"]) <= now <= datetime.fromisoformat(t["rueckkehr"])
-            for t in (self.plan or {}).get("trips", [])
-        ):
-            return  # unterwegs
         if self._snooze_until is not None:
             if now < self._snooze_until:
                 return
@@ -807,6 +806,17 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     {"action": ACTION_SKIP, "title": "Heute nicht"},
                 ]},
             })
+
+    def _away_from_home(self, now: datetime) -> bool:
+        """Roy nicht zu Hause (Person-Entität) oder eine Kalenderfahrt läuft gerade."""
+        person = self.hass.states.get(CONF_PERSON)
+        if person is not None and person.state not in ("home", "unknown", "unavailable"):
+            return True
+        trips = [*self.ongoing_trips, *(self.plan or {}).get("trips", [])]
+        return any(
+            datetime.fromisoformat(str(t["abfahrt"])) <= now <= datetime.fromisoformat(str(t["rueckkehr"]))
+            for t in trips
+        )
 
     async def _async_trip_reminder(self, now: datetime) -> bool:
         """Fahrt in den nächsten REMIND_TRIP_AHEAD_H Stunden und es fehlt Energie: einmal je Fahrt erinnern,

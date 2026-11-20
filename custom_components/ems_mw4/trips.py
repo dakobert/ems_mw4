@@ -20,7 +20,12 @@ def is_address(location: str | None) -> bool:
     return bool(location and _PLZ.search(location))
 
 
-_OVERNIGHT = ("#übernachtung", "#uebernachtung", "#&uuml;bernachtung", "#&#252;bernachtung")
+# „#übernachtung“, „#übernachten“, „#uebernacht…“ usw. (Roy 20.11.2026: „#übernachten“ wurde nicht erkannt)
+_OVERNIGHT_RE = re.compile(r"#(?:ü|ue|&uuml;|&#252;)bernacht")
+
+
+def is_overnight(text: str) -> bool:
+    return bool(_OVERNIGHT_RE.search(text.lower()))
 
 
 def _day_time(day: date, hours: float, tz: Any) -> datetime:
@@ -47,7 +52,7 @@ def parse_events(events: list[dict[str, Any]], now: datetime, p: Params | None =
         if not coords and not is_address(location):
             continue
         text = f"{event.get('summary') or ''} {event.get('description') or ''}".lower()
-        overnight = any(tag in text for tag in _OVERNIGHT)
+        overnight = is_overnight(text)
         base = {"summary": event.get("summary") or "", "address": location or coords, "coords": coords,
                 "overnight": overnight}
         try:
@@ -124,7 +129,7 @@ def absence(events: list[dict[str, Any]], now: datetime, p: Params | None = None
             continue
         day_end[last] = max(day_end.get(last, finish), finish)
         text = f"{event.get('summary') or ''} {event.get('description') or ''}".lower()
-        if not any(tag in text for tag in _OVERNIGHT):
+        if not is_overnight(text):
             continue
         day = first
         while day < last or day == first:
@@ -245,6 +250,19 @@ def drop_finished(trips: list[dict[str, Any]], now: datetime, connected: bool) -
     if not connected:
         return trips
     return [t for t in trips if t["abfahrt"] > now]
+
+
+def ongoing_trips(
+    visits: list[dict[str, Any]], routes: dict[str, dict[str, Any]], now: datetime, p: Params
+) -> list[dict[str, Any]]:
+    """Fahrten, die schon begonnen haben und noch laufen (Abfahrt vorbei, Rückkehr noch nicht).
+
+    Fallen aus dem Planfenster heraus, werden aber gebraucht, um „unterwegs“ zu erkennen (Roy 20.11.2026).
+    """
+    return [
+        {"summary": t["summary"], "abfahrt": t["abfahrt"].isoformat(), "rueckkehr": t["rueckkehr"].isoformat()}
+        for t in build_trips(visits, routes, p) if t["abfahrt"] <= now < t["rueckkehr"]
+    ]
 
 
 def later_trips(

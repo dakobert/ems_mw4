@@ -274,6 +274,7 @@ ROUTE_MAX_AGE_DAYS = 30
 CURVE_WRITE_GAP_S = 72 * 3600
 BLOCK_LOG_STORE_KEY = f"{DOMAIN}.sperren"
 NOTIFY_SERVICE = "mobile_app_iphone_von_roy"
+CONF_PERSON = "person.roy"  # Erinnerung ans Anstecken nur, wenn Roy zu Hause ist (20.11.2026)
 
 
 @dataclass(frozen=True)
