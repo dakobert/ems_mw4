@@ -18,6 +18,11 @@ ROOM_FROZEN_SEEN_S = 36 * 3600  # Gerät lebt (last_seen frisch), Wert trotzdem 
 # Temperatur UND Feuchte desselben Geräts so lange exakt gleich: Messung hängt (Tuya bei schwacher
 # Batterie, 18./19.11.2026: Wohnzimmer 23 h, Bad EG 27 h eingefroren, last_seen trotzdem frisch)
 ROOM_PAIR_FROZEN_S = 8 * 3600
+# Grob auflösende Fühler (0,5 K / 1 %, melden nur bei Änderung): Stillstand ist dort normal
+# (Küche/EG 1, ZTH05, 20./21.11.2026) – die Paar-Regel gilt für sie nicht
+ROOM_COARSE_MODELS = ("ZTH05",)
+# Hängender Fühler wird erst nach so langer Zeit gemeldet (Roy 21.11.: nur mehrtägige Probleme)
+ROOM_FROZEN_PUSH_S = 48 * 3600
 # Auto-Ladestand gilt als veraltet, wenn das Auto so lange nichts meldet (BMW-Störung 23.–25.10.2026)
 CAR_SOC_STALE_S = 6 * 3600
 # Zeitpunkt des letzten erfolgreichen Abrufs bei BMW (CarData), sonst zählt der Ladestand-Sensor selbst

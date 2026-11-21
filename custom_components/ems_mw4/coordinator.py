@@ -9,6 +9,7 @@ from typing import Any
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import STATE_OFF, STATE_ON, STATE_UNAVAILABLE, STATE_UNKNOWN
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers import device_registry as dr, entity_registry as er
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.util import dt as dt_util
@@ -41,6 +42,8 @@ from .const import (  # noqa: I001
     ROOM_FROZEN_S,
     ROOM_FROZEN_SEEN_S,
     ROOM_PAIR_FROZEN_S,
+    ROOM_COARSE_MODELS,
+    ROOM_FROZEN_PUSH_S,
     MIN_ROOMS,
     ABSENCE_ROOM_SENSORS,
     CAR_SOC_STALE_S,
@@ -126,6 +129,7 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._room_pair_seen: dict[str, tuple[tuple[float, float], datetime]] = {}
         self.rooms_frozen: dict[str, float] = {}  # Fühler mit hängender Messung -> Stunden
         self._frozen_pushed: set[str] = set()
+        self._coarse: dict[str, bool] = {}
         self.heat_fit_days: int = 0
         self._model_day: Any = None
         self._replanning = False
@@ -272,6 +276,8 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         Die Feuchte schwankt in bewohnten Räumen laufend, auch wenn die Temperatur ruht. Bleiben beide
         stehen, obwohl das Gerät funkt, misst der Fühler nicht mehr (meist schwache Batterie).
         """
+        if self._room_coarse(entity_id):
+            return False
         hum_state = self.hass.states.get(entity_id[: -len("_temperature")] + "_humidity")
         hum = to_number(hum_state.state) if hum_state is not None else None
         if hum is None:
@@ -291,10 +297,25 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.rooms_frozen.pop(entity_id, None)
         return False
 
+    def _room_coarse(self, entity_id: str) -> bool:
+        """Fühler mit grober Auflösung (Modell in ROOM_COARSE_MODELS)."""
+        if entity_id not in self._coarse:
+            coarse = False
+            entry = er.async_get(self.hass).async_get(entity_id)
+            if entry is not None and entry.device_id:
+                device = dr.async_get(self.hass).async_get(entry.device_id)
+                model = f"{device.model_id or ''} {device.model or ''}" if device is not None else ""
+                coarse = any(m in model for m in ROOM_COARSE_MODELS)
+            self._coarse[entity_id] = coarse
+        return self._coarse[entity_id]
+
     async def _async_frozen_push(self, now: datetime) -> None:
-        """Hängende Fühler einmal je Vorfall melden, nur tagsüber (7–22 Uhr)."""
-        new = [e for e in self.rooms_frozen if e not in self._frozen_pushed]
-        if not new or not 7 <= now.hour < 22:
+        """Nur mehrtägig hängende Fühler melden, einmal je Vorfall, abends (18–21 Uhr)."""
+        new = [
+            e for e, h in self.rooms_frozen.items()
+            if e not in self._frozen_pushed and h * 3600 >= ROOM_FROZEN_PUSH_S
+        ]
+        if not new or not 18 <= now.hour < 21:
             return
         if not self.hass.services.has_service("notify", NOTIFY_SERVICE):
             return
@@ -303,11 +324,11 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         for entity_id in new:
             state = self.hass.states.get(entity_id)
             name = state.attributes.get("friendly_name", entity_id) if state is not None else entity_id
-            names.append(f"{name.replace(' Temperatur', '')} ({self.rooms_frozen[entity_id]:.0f} h)")
+            names.append(f"{name.replace(' Temperatur', '').replace('Temperatursensor ', '')} "
+                         f"({self.rooms_frozen[entity_id] / 24:.0f} Tage)")
         await self.hass.services.async_call("notify", NOTIFY_SERVICE, {
-            "title": "EMS MW4: Fühler hängt",
-            "message": "Keine neuen Messwerte: " + ", ".join(names) + ". Batterie wechseln; "
-                       "der Fühler zählt bis dahin nicht für die Heizung.",
+            "title": "Batterie wechseln",
+            "message": "Seit Tagen keine Messwerte: " + ", ".join(names) + ".",
         }, blocking=False)
 
     def _room_last_seen_ok(self, entity_id: str, now: datetime) -> bool | None:
