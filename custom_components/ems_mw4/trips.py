@@ -28,6 +28,15 @@ def is_overnight(text: str) -> bool:
     return bool(_OVERNIGHT_RE.search(text.lower()))
 
 
+# „#ohneauto“ (auch „#ohne-auto“, „#ohne_auto“): Roy fährt nicht mit dem eigenen Auto (Bahn, Mitfahrt;
+# Roy 25.11.2026). Der Termin ist keine Fahrt, zählt für die Heizung aber weiter als Abwesenheit.
+_NO_CAR_RE = re.compile(r"#ohne[-_]?auto")
+
+
+def is_no_car(text: str) -> bool:
+    return bool(_NO_CAR_RE.search(text.lower()))
+
+
 def _day_time(day: date, hours: float, tz: Any) -> datetime:
     return datetime.combine(day, time(int(hours), int(round(hours % 1 * 60))), tzinfo=tz)
 
@@ -40,6 +49,8 @@ def parse_events(events: list[dict[str, Any]], now: datetime, p: Params | None =
     - Mehrtägig mit Uhrzeit: tägliche Hin- und Rückfahrt, erster Tag ab Beginn, letzter Tag bis Ende.
     - „#übernachtung" in Titel oder Notizen: einmal hin, einmal zurück, dazwischen durchgehend abwesend.
       Gilt auch für zwei getrennte Termine an aufeinanderfolgenden Tagen (Roy 25.10.): Markierung an einem genügt.
+    - „#ohneauto" in Titel oder Notizen: Aufenthalt bekommt „no_car“ und ist keine Fahrt (build_trips lässt ihn
+      weg). Bei per Übernachtung verbundenen Terminen genügt die Markierung an einem, wie bei „#übernachtung".
     Ohne Koordinaten oder Adresse mit Postleitzahl ist ein Termin keine Fahrt.
     """
     p = p or Params()
@@ -54,7 +65,7 @@ def parse_events(events: list[dict[str, Any]], now: datetime, p: Params | None =
         text = f"{event.get('summary') or ''} {event.get('description') or ''}".lower()
         overnight = is_overnight(text)
         base = {"summary": event.get("summary") or "", "address": location or coords, "coords": coords,
-                "overnight": overnight}
+                "overnight": overnight, "no_car": is_no_car(text)}
         try:
             if "T" not in start:  # ganztägig, Ende ist der Tag danach
                 first, last = date.fromisoformat(start[:10]), date.fromisoformat(end[:10]) - timedelta(days=1)
@@ -89,7 +100,23 @@ def parse_events(events: list[dict[str, Any]], now: datetime, p: Params | None =
                 "back_fixed": None if late else _day_time(day, home, now.tzinfo),
             })
             day += timedelta(days=1)
-    return sorted((v for v in visits if v["start"] > now), key=lambda v: v["start"])
+    visits.sort(key=lambda v: v["start"])
+    # Übernachtung verbindet Termine an aufeinanderfolgenden Tagen zu einer Reise: „#ohneauto“ an einem gilt für alle
+    changed = True
+    while changed:
+        changed = False
+        for a, b in zip(visits, visits[1:]):
+            linked = (a["overnight"] or b["overnight"]) and (b["start"].date() - a["end"].date()).days == 1
+            if linked and a["no_car"] != b["no_car"]:
+                a["no_car"] = b["no_car"] = True
+                changed = True
+    return [v for v in visits if v["start"] > now]
+
+
+def no_car_visits(visits: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Termine mit „#ohneauto“ zur Anzeige (keine Fahrt, kein Ladebedarf)."""
+    return [{"summary": v["summary"], "beginn": v["start"].isoformat(), "ende": v["end"].isoformat()}
+            for v in visits if v.get("no_car")]
 
 
 def _event_span(event: dict[str, Any], tz: Any, p: Params) -> tuple[date, date, datetime, datetime] | None:
@@ -179,6 +206,8 @@ def build_trips(visits: list[dict[str, Any]], routes: dict[str, dict[str, Any]],
     """Aufenthalte zu Fahrten: Abfahrt, Rückkehr, Energie. Lohnt die Heimfahrt zwischen zwei Terminen nicht, werden sie zur Kette."""
     legs = []
     for visit in visits:
+        if visit.get("no_car"):
+            continue  # „#ohneauto“: Roy fährt nicht mit dem eigenen Auto
         route = routes.get(visit["address"])
         if not route or route.get("km") is None or route.get("min") is None:
             continue

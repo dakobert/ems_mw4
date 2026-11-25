@@ -706,3 +706,35 @@ def test_response_model_and_plan() -> None:
     hot = th.plan_comfort(model, 21.6, [], [6.0] * 36, p, 18.5, 24.5)
     assert hot["comfort_c"] < th.comfort_for(model, 21, 6)
     assert hot["raum_max_c"] <= 21.6
+
+
+def test_no_car_tag():
+    """„#ohneauto“ (Roy 25.11.2026): keine Fahrt, aber weiter Abwesenheit für die Heizung."""
+    from datetime import datetime, timedelta, timezone
+    from custom_components.ems_mw4 import trips as tr
+    tz = timezone(timedelta(hours=1))
+    now = datetime(2026, 11, 25, 12, 0, tzinfo=tz)
+    a = "52.0,8.0"
+    routes = {"A": {"km": 150.0, "min": 90.0, "t": ""}, "B": {"km": 60.0, "min": 50.0, "t": ""}}
+
+    def ev(start, end, loc, desc=""):
+        return {"start": start, "end": end, "summary": loc, "location": loc, "coords": a, "description": desc}
+
+    assert tr.is_no_car("<p>Zug #OhneAuto</p>") and tr.is_no_car("#ohne-auto") and not tr.is_no_car("ohne auto")
+    # einzelner Termin mit Bahn: keine Fahrt, erscheint aber in der Anzeige
+    visits = tr.parse_events([ev("2026-11-26T09:00:00+01:00", "2026-11-26T16:00:00+01:00", "A", "#ohneauto"),
+                              ev("2026-11-27T09:00:00+01:00", "2026-11-27T12:00:00+01:00", "B")], now)
+    trips = tr.build_trips(visits, routes, P)
+    assert [t["summary"] for t in trips] == ["B"]
+    assert [v["summary"] for v in tr.no_car_visits(visits)] == ["A"]
+    # Übernachtung über zwei Termine, „#ohneauto“ nur am ersten: beide Tage ohne Auto
+    two = [ev("2026-11-26T09:00:00+01:00", "2026-11-26T16:00:00+01:00", "A", "#übernachtung #ohneauto"),
+           ev("2026-11-27T09:00:00+01:00", "2026-11-27T16:00:00+01:00", "A")]
+    assert tr.build_trips(tr.parse_events(two, now), routes, P) == []
+    # Markierung nur am zweiten Tag gilt ebenso
+    two[0]["description"], two[1]["description"] = "#übernachtung", "#ohneauto"
+    assert tr.build_trips(tr.parse_events(two, now), routes, P) == []
+    # Heizung: Abwesenheit wird trotz „#ohneauto“ erkannt
+    away = [ev("2026-11-26", "2026-11-30", "Urlaub", "#übernachtung #ohneauto")]
+    assert tr.build_trips(tr.parse_events(away, now), routes, P) == []
+    assert tr.absence(away, now, P)["naechte"] == 3

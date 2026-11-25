@@ -148,6 +148,7 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.trip_status: str = "noch nicht gelesen"
         self.trip_shapes: list[dict[str, Any]] = []
         self.later_trips: list[dict[str, Any]] = []
+        self.no_car_trips: list[dict[str, Any]] = []  # Termine mit „#ohneauto“ (nur Anzeige)
         self._last_mileage: float | None = None
         self._arrival: datetime | None = None
         self._reminder_sent_for: datetime | None = None
@@ -691,7 +692,8 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self.routes = (await self._route_store.async_load() or {}).get("routes", {})
             self._routes_loaded = True
         if self.hass.states.get(CONF_TRIP_CALENDAR) is None or not self.hass.services.has_service("calendar", "get_events"):
-            self.trips, self.ongoing_trips, self.trip_status = [], [], "Kalender nicht verfügbar"
+            self.trips, self.ongoing_trips, self.no_car_trips = [], [], []
+            self.trip_status = "Kalender nicht verfügbar"
             return []
         events = await self._async_events_direct(now)
         source = "volle Adressen"
@@ -704,7 +706,9 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             events = (response or {}).get(CONF_TRIP_CALENDAR, {}).get("events", [])
         self.trip_shapes = [e["shape"] for e in events if e.get("shape") and e["shape"].get("felder")][:6]
         self.absence = tr.absence(events, now, self.params)
-        found = tr.parse_events(events, now, self.params)
+        visits = tr.parse_events(events, now, self.params)
+        self.no_car_trips = tr.no_car_visits(visits)
+        found = [v for v in visits if not v.get("no_car")]  # „#ohneauto“: keine Fahrt, keine Streckenabfrage
         stale = now - timedelta(days=ROUTE_MAX_AGE_DAYS)
         lookups = 0
         for trip in found:
@@ -727,7 +731,8 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.ongoing_trips = tr.ongoing_trips(found, self.routes, now, learned)
         missing = len({t["address"] for t in found if t["address"] not in self.routes})
         self.trip_status = (
-            f"{len(found)} Termine mit Adresse" + (f", {missing} ohne Strecke" if missing else "") + f" ({source})"
+            f"{len(found)} Termine mit Adresse" + (f", {missing} ohne Strecke" if missing else "")
+            + (f", {len(self.no_car_trips)} ohne Auto" if self.no_car_trips else "") + f" ({source})"
         )
         return self.trips
 
