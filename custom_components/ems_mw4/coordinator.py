@@ -62,7 +62,7 @@ from .const import (  # noqa: E402
     CONF_DHW_TARGETS, HEAT_DATA_FROM, CONF_GOE_AMP, CONF_GOE_FRC, CONF_GOE_PSM, CONF_SG_INPUT_1, CONF_SG_INPUT_2, MODBUS_BATTERY_SETPOINT,
     MODBUS_HUB, MODBUS_SLAVE, PLAN_MAX_AGE_S, SWITCH_BATTERY, SWITCH_DHW, SWITCH_MASTER, SWITCH_WALLBOX,
     BLOCK_LOG_STORE_KEY, CONF_PERSON, NOTIFY_SERVICE, SWITCH_HEATING, SWITCH_HEAT_BLOCK, SWITCH_QUIET,
-    SWITCH_PROACTIVE, SWITCH_CURVE, SWITCH_CAR_NOW, CONF_COMFORT_TEMP, CONF_HEAT_CURVE, CONF_SUMMER_MODE, COMFORT_WRITE_GAP_S, RESPONSE_FIT_GAP_S,
+    SWITCH_PROACTIVE, SWITCH_CURVE, SWITCH_CAR_NOW, SWITCH_HEAT_PRICE, CONF_COMFORT_TEMP, CONF_HEAT_CURVE, CONF_SUMMER_MODE, COMFORT_WRITE_GAP_S, RESPONSE_FIT_GAP_S,
 )
 from . import thermal as th  # noqa: E402
 from . import trips as tr  # noqa: E402
@@ -138,6 +138,7 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             SWITCH_MASTER: False, SWITCH_BATTERY: True, SWITCH_DHW: True, SWITCH_WALLBOX: True,
             SWITCH_HEATING: False, SWITCH_HEAT_BLOCK: False, SWITCH_QUIET: False,
             SWITCH_PROACTIVE: False, SWITCH_CURVE: False, SWITCH_CAR_NOW: False,
+            SWITCH_HEAT_PRICE: True,
         }
         self._route_store: Store[dict[str, Any]] = Store(hass, STORE_VERSION, ROUTE_STORE_KEY)
         self.routes: dict[str, dict[str, Any]] = {}
@@ -181,6 +182,8 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._absence_cancelled: datetime | None = None
         self._boost_done: datetime | None = None  # Rückkehrzeit, für die der Aufheiz-Boost schon beendet ist
         self._boost_was_active = False
+        self._reheat_fixed: tuple[datetime, datetime] | None = None  # (Rückkehr, Aufheizbeginn), sobald begonnen
+        self._price_shift_written: float | None = None
         self.intent: dict[str, Any] = {"grund": "noch nicht gerechnet"}
         self.last_written: dict[str, Any] = {}
         self._psm_changes: list[datetime] = []
@@ -578,6 +581,7 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             _LOGGER.exception("Fahrten konnten nicht gelesen werden")
             trips, self.trip_status = [], "Fehler beim Lesen"
         trips = tr.drop_finished(trips, now, self.data.get("car_connected") == 1.0)
+        self._apply_reheat_model(now, temps)
         car_soc = self._car_soc_for_plan(now)
         self.sunny = th.sunny_tomorrow(
             slots, pv, [b + h for b, h in zip(base, heat)], (now + timedelta(days=1)).date(), self.params.battery_kwh)
@@ -599,7 +603,8 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             series = th.hourly_series(self.samples, dt_util.utcnow())
             self.response_model = await self.hass.async_add_executor_job(th.fit_response, series)
             self._response_fit_at = now
-        self._update_proactive(temps, th.coldest_day(daily, now.date(), self.params.heat_days_ahead))
+        self._update_proactive(
+            temps, th.coldest_day(daily, now.date(), self.params.heat_days_ahead), th.hourly_prices(slots, prices))
         self.plan, self.plan_time = plan, now
         self._record_forecast(now, plan)
         self.plan_status = "ok" if not any(estimated[:96]) else "ok, Preise teils geschätzt"
@@ -912,7 +917,31 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         state = self.hass.states.get(entity_id)
         return to_number(state.state) if state is not None else None
 
-    def _update_proactive(self, temps: list[float | None], cold_ahead: float | None = None) -> None:
+    def _apply_reheat_model(self, now: datetime, temps: list[float | None]) -> None:
+        """Aufheizbeginn nach Abwesenheit aus dem Trägheitsmodell (0.25.0). Steht fest, sobald er erreicht ist."""
+        a = self.absence
+        if not a:
+            return
+        back = a["rueckkehr"]
+        if self._reheat_fixed is not None and self._reheat_fixed[0] == back:
+            a["aufheizen_ab"], a["aufheizen_nach"] = self._reheat_fixed[1], "Modell (begonnen)"
+            return
+        out_h = [v for v in (
+            th._mean([t for t in temps[i:i + 4] if t is not None]) for i in range(0, len(temps), 4)
+        ) if v is not None]
+        start = th.reheat_start(
+            self.response_model, (self.data or {}).get(KEY_ROOM_TEMP), now, a["absenken_ab"], back, out_h, self.params)
+        if start is None:
+            a["aufheizen_nach"] = "feste Vorgabe (Modell nicht gültig)"
+            return
+        a["aufheizen_ab"], a["aufheizen_nach"] = start, "Modell"
+        a["aufheizen_vor_rueckkehr_h"] = round((back - start).total_seconds() / 3600, 1)
+        if now >= start:
+            self._reheat_fixed = (back, start)
+
+    def _update_proactive(
+        self, temps: list[float | None], cold_ahead: float | None = None, hourly_prices: list[float | None] | None = None,
+    ) -> None:
         """Empfehlung für Komforttemperatur und Heizkurve neu rechnen (alle 15 Minuten mit dem Plan)."""
         now = dt_util.utcnow()
         from dataclasses import replace
@@ -956,13 +985,25 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if boost != self._boost_was_active:
             self._comfort_written_at = None  # Boost-Wechsel sofort schreiben, nicht 3 h warten
             self._boost_was_active = boost
+        # Preisgeführt (0.25.0): Estrich in günstigen Stunden vorladen, in teuren zurücknehmen
+        price = {"shift_k": 0.0, "grund": "aus"}
+        if not self.switches.get(SWITCH_HEAT_PRICE, False):
+            price["grund"] = "Schalter aus"
+        elif self.away_active():
+            price["grund"] = "Abwesenheit"
+        elif hourly_prices:
+            price = th.price_shift(hourly_prices, room_now, p)
+        total = adv["shift_k"] + price["shift_k"]
+        total = max(-p.heat_model_down_k, min(max(p.heat_shift_max_k, adv["shift_k"]), total))
+        price["shift_k"] = round(total - adv["shift_k"], 1)  # was nach der Begrenzung wirklich wirkt
         curve = self._number(CONF_HEAT_CURVE)
         recent = self.samples[-3 * 96 :]
         steady = bool(recent) and all(s.get("heat_curve") == curve for s in recent)
         history = [s["heat_shift"] for s in recent if s.get("heat_shift") is not None]
         summer = self.hass.states.get(CONF_SUMMER_MODE)
         adv.update({
-            "comfort_target_c": round(p.heat_comfort_base_c + adv["shift_k"], 1),
+            "comfort_target_c": round(p.heat_comfort_base_c + total, 1),
+            "preis": price,
             "abwesend": self.away_active(),
             "aufheiz_boost": boost,
             "modell": dict(self.response_model),
@@ -981,11 +1022,17 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         call = self.hass.services.async_call
         target, current = adv.get("comfort_target_c"), self._number(CONF_COMFORT_TEMP)
         due = self._comfort_written_at is None or (now - self._comfort_written_at).total_seconds() >= COMFORT_WRITE_GAP_S
+        # Wechsel der Preisstufe sofort schreiben (die günstigen/teuren Stunden warten nicht 3 h)
+        price_k = (adv.get("preis") or {}).get("shift_k", 0.0)
+        due = due or price_k != self._price_shift_written
         if target is not None and current is not None and adv.get("predicted_c") is not None:
             if abs(target - current) >= 0.05 and due:
                 await call("number", "set_value", {"entity_id": CONF_COMFORT_TEMP, "value": target}, blocking=True)
                 self._comfort_written_at, self._comfort_touched = now, True
+                self._price_shift_written = price_k
                 current = target
+            elif abs(target - current) < 0.05:
+                self._price_shift_written = price_k
             written["comfort_c"] = current
         curve = adv.get("curve_target")
         if self.switches[SWITCH_CURVE] and curve is not None and self._number(CONF_HEAT_CURVE) is not None:

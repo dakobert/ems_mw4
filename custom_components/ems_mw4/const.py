@@ -191,8 +191,10 @@ class Params:
     trip_home_stay_min: float = 60.0  # Kette, wenn zwischen zwei Terminen weniger Zeit zu Hause bliebe
     allday_depart_h: float = 7.0  # ganztägige Termine: angenommene Abwesenheit
     allday_back_h: float = 17.0
-    # Abwesenheit (Roy 26.10.): ab so vielen Nächten am Stück („#übernachtung“) Heizung absenken, Warmwasser aus
-    away_min_nights: int = 3
+    # Abwesenheit (Roy 26.10.): ab so vielen Nächten am Stück („#übernachtung“) Heizung absenken, Warmwasser aus.
+    # 0.25.0 (Roy 25.11.2026): 5 statt 3 – bei 3 Nächten blieben nur ~24 h Absenkung, danach heizte der Boost das
+    # leere Haus zu Tagespreisen wieder auf; das kostete mehr, als die Absenkung sparte.
+    away_min_nights: int = 5
     away_room_c: float = 17.0  # nicht darunter, gilt für den kältesten Raum
     # Der kälteste Raum liegt ~1,5 K unter den EG-Räumen: Komfortgrundwert bei Abwesenheit daher über dem Raumziel
     away_comfort_offset_k: float = 1.0
@@ -207,6 +209,10 @@ class Params:
     away_boost_end_before_h: float = 24.0
     away_boost_margin_k: float = 0.5
     away_min_setback_h: float = 24.0  # kürzer lohnt sich nicht
+    # 0.25.0: Aufheizbeginn aus dem Trägheitsmodell (spätester Beginn, mit dem die Referenz das Ziel bis auf
+    # away_boost_margin_k away_boost_end_before_h vor der Rückkehr erreicht), plus Puffer. away_reheat_before_h ist
+    # dann die Obergrenze.
+    away_reheat_buffer_h: float = 12.0
     trip_min_km: float = 5.0  # näher gelegene Ziele zählen nicht als Fahrt
     car_cheap_below_mean_ct: float = 6.0
     base_load_default_w: float = 350.0
@@ -234,6 +240,13 @@ class Params:
     heat_shift_max_k: float = 4.0  # Modell (0.24) wählt selbst; bei 0 °C außen braucht es ~24,5
     heat_shift_min_k: float = 1.0
     heat_model_down_k: float = 2.0  # Modell darf so weit unter den Grundwert gehen (früh zurücknehmen)
+    # Preisgeführtes Heizen (0.25.0, Roy 25.11.2026): der Estrich als Wärmespeicher. In den heat_price_hours
+    # günstigsten Stunden der nächsten 24 h Komfort + heat_price_shift_k, in ebenso vielen teuersten − heat_price_shift_k
+    # (energieneutral). Nur bei genug Preisspanne und solange die Referenz im Band Ziel ± heat_price_band_k liegt.
+    heat_price_shift_k: float = 0.5
+    heat_price_hours: int = 5
+    heat_price_min_spread_ct: float = 6.0  # darunter frisst der schlechtere COP beim Vorheizen den Vorteil
+    heat_price_band_k: float = 0.3  # Roy: 20,7–21,3 °C
     heat_curve_min: float = 0.35
     heat_curve_max: float = 0.50
 
@@ -260,6 +273,7 @@ SWITCH_QUIET = "quiet_once"
 SWITCH_PROACTIVE = "heat_proactive"
 SWITCH_CURVE = "heat_curve_auto"
 SWITCH_CAR_NOW = "car_now"
+SWITCH_HEAT_PRICE = "heat_price"
 CONF_COMFORT_TEMP = "number.stiebel_eltron_isg_comfort_temperature_target_hk1"
 # Warmwasser wird über die Sollwerte geladen, nicht über SG Ready: Das Energiemanagement des ISG
 # verstellt bei Zustand 3 auch die Heizung und schreibt danach alte Sollwerte zurück (06./07.10.2026).
@@ -309,7 +323,7 @@ SETTINGS: tuple[Setting, ...] = (
     Setting("dhw_kwh", "Warmwasser Energie je Ladung", 0.5, 4, 0.1, "kWh", "mdi:water-boiler"),
     Setting("dhw_skip_above_c", "Warmwasser: heute keine Ladung ab", 38, 60, 1, "°C", "mdi:thermometer-water"),
     Setting("away_room_c", "Abwesenheit: Mindesttemperatur je Raum", 15, 20, 0.5, "°C", "mdi:home-thermometer-outline"),
-    Setting("away_reheat_before_h", "Abwesenheit: normal heizen vor Rückkehr", 12, 168, 6, "h", "mdi:radiator"),
+    Setting("away_reheat_before_h", "Abwesenheit: Aufheizen höchstens vor Rückkehr", 12, 168, 6, "h", "mdi:radiator"),
     Setting("away_boost_k", "Abwesenheit: Anhebung beim Aufheizen", 0, 4, 0.5, "K", "mdi:arrow-up-bold-circle"),
     Setting("away_boost_end_before_h", "Abwesenheit: Boost endet vor Rückkehr", 6, 72, 6, "h", "mdi:timer-off"),
     Setting("heat_limit_c", "Heizgrenze", 10, 20, 0.5, "°C", "mdi:thermometer-lines"),

@@ -365,3 +365,100 @@ def plan_comfort(
     _, c, traj = best
     return {"comfort_c": c, "raum_24h_c": round(traj[min(23, len(traj) - 1)], 2),
             "raum_max_c": round(max(traj), 2), "raum_min_c": round(min(traj), 2)}
+
+
+# ---------- 0.25.0: Preisgeführtes Heizen und Aufheizbeginn aus dem Modell (Roy 25.11.2026) ----------
+
+
+def hourly_prices(slots: list[datetime], prices: list[float | None]) -> list[float | None]:
+    """Preise je Stunde ab der Stunde des ersten Slots (Mittel der Viertelstunden)."""
+    if not slots:
+        return []
+    start = slots[0].replace(minute=0, second=0, microsecond=0)
+    buckets: dict[int, list[float]] = {}
+    for t, v in zip(slots, prices):
+        if v is None:
+            continue
+        buckets.setdefault(int((t - start).total_seconds() // 3600), []).append(v)
+    if not buckets:
+        return []
+    return [_mean(buckets.get(i, [])) for i in range(max(buckets) + 1)]
+
+
+def price_shift(hourly: list[float | None], room_now: float | None, p: Params) -> dict[str, Any]:
+    """Verschiebung der Komforttemperatur nach dem Preis der laufenden Stunde.
+
+    Die heat_price_hours günstigsten Stunden der nächsten 24 h bekommen + heat_price_shift_k, ebenso viele teuerste
+    − heat_price_shift_k: der Estrich nimmt die Wärme billig auf und gibt sie in den teuren Stunden ab, im Mittel
+    bleibt die Raumtemperatur gleich. Nichts tun bei zu kleiner Spanne oder wenn die Referenz das Band verlässt.
+    """
+    res: dict[str, Any] = {"shift_k": 0.0, "grund": "", "spanne_ct": None}
+    window = [v for v in hourly[:24] if v is not None]
+    n = int(p.heat_price_hours)
+    if not hourly or hourly[0] is None or len(window) < max(12, 2 * n) or n <= 0:
+        res["grund"] = "zu wenig Preise"
+        return res
+    order = sorted(window)
+    cheap_mean, dear_mean = sum(order[:n]) / n, sum(order[-n:]) / n
+    spread = dear_mean - cheap_mean
+    res["spanne_ct"] = round(spread, 1)
+    if spread < p.heat_price_min_spread_ct:
+        res["grund"] = f"Preisspanne {spread:.1f} ct zu klein"
+        return res
+    now_price = hourly[0]
+    if now_price <= order[n - 1]:
+        if room_now is not None and room_now > p.room_target_c + p.heat_price_band_k:
+            res["grund"] = "günstige Stunde, Raum schon warm"
+            return res
+        res.update(shift_k=p.heat_price_shift_k, grund=f"günstige Stunde ({now_price:.1f} ct): vorheizen")
+    elif now_price >= order[-n]:
+        if room_now is not None and room_now < p.room_target_c - p.heat_price_band_k:
+            res["grund"] = "teure Stunde, Raum zu kühl"
+            return res
+        res.update(shift_k=-p.heat_price_shift_k, grund=f"teure Stunde ({now_price:.1f} ct): zurücknehmen")
+    else:
+        res["grund"] = "mittlerer Preis"
+    return res
+
+
+def reheat_start(
+    model: dict[str, Any], room_now: float | None, now: datetime, lower: datetime, back: datetime,
+    out_hourly: list[float], p: Params,
+) -> datetime | None:
+    """Spätester sinnvoller Beginn des Wiederaufheizens nach einer Abwesenheit.
+
+    Simuliert stündlich mit dem Trägheitsmodell: bis zum Absenken bleibt der Raum, dann Komfort der Abwesenheit,
+    ab dem Aufheizbeginn die größte Anhebung. Gesucht ist der späteste Beginn, mit dem die Referenz das Raumziel bis
+    auf away_boost_margin_k spätestens away_boost_end_before_h vor der Rückkehr erreicht. Davor kommen die
+    Ansprechverzögerung und away_reheat_buffer_h. Nie früher als away_reheat_before_h vor der Rückkehr und nie
+    früher als away_min_setback_h nach dem Absenken. Ohne gültiges Modell: None (feste Vorgabe gilt).
+    """
+    if not model.get("gueltig") or room_now is None:
+        return None
+    a, b, g, lag = model["a"], model["b"], model["g"], int(model.get("verzoegerung_h") or 0)
+    away_c = p.away_room_c + p.away_comfort_offset_k
+    hot_c = p.heat_comfort_base_c + max(p.heat_shift_max_k, p.away_boost_k)
+    goal = p.room_target_c - p.away_boost_margin_k
+    deadline = back - timedelta(hours=p.away_boost_end_before_h)
+    earliest = max(back - timedelta(hours=p.away_reheat_before_h), lower + timedelta(hours=p.away_min_setback_h))
+    fallback = _mean(out_hourly) if out_hourly else 5.0
+    hours = int((deadline - now).total_seconds() // 3600)
+    if hours <= 0:
+        return earliest
+
+    def reaches(start: datetime) -> bool:
+        x = room_now
+        for k in range(hours):
+            t = now + timedelta(hours=k)
+            if t < lower:
+                continue  # vor dem Absenken bleibt der Raum etwa, wie er ist
+            c = away_c if t < start else hot_c
+            out = out_hourly[k] if k < len(out_hourly) else fallback
+            x = x + a * (c - x) + b * (out - x) + g
+        return x >= goal
+
+    start = deadline.replace(minute=0, second=0, microsecond=0)
+    while start > earliest and not reaches(start):
+        start -= timedelta(hours=1)
+    start -= timedelta(hours=lag + p.away_reheat_buffer_h)
+    return max(start, earliest)

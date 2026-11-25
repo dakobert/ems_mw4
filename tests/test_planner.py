@@ -664,7 +664,10 @@ def test_absence_from_overnight():
     # drei markierte Tagestermine am Stück, Rückkehr = Ende des Termins am vierten Tag
     three = [ev(f"2026-11-0{d}T09:00:00+01:00", f"2026-11-0{d}T16:00:00+01:00", desc="<p>#&uuml;bernachtung</p>")
              for d in (4, 5, 6)] + [ev("2026-11-07T09:00:00+01:00", "2026-11-07T15:00:00+01:00")]
-    a = tr.absence(three, now, P)
+    # 0.25.0: drei Nächte lohnen nicht mehr (ab 5); mit Mindestwert 3 weiter wie bisher
+    assert tr.absence(three, now, P) is None
+    from dataclasses import replace
+    a = tr.absence(three, now, replace(P, away_min_nights=3))
     assert a["naechte"] == 3 and a["rueckkehr"] == datetime(2026, 11, 7, 15, 0, tzinfo=tz)
     assert a["aufheizen_ab"] - a["absenken_ab"] >= timedelta(hours=24)
     # ohne Markierung nichts; schon vorbei nichts
@@ -737,4 +740,53 @@ def test_no_car_tag():
     # Heizung: Abwesenheit wird trotz „#ohneauto“ erkannt
     away = [ev("2026-11-26", "2026-11-30", "Urlaub", "#übernachtung #ohneauto")]
     assert tr.build_trips(tr.parse_events(away, now), routes, P) == []
-    assert tr.absence(away, now, P)["naechte"] == 3
+    from dataclasses import replace
+    assert tr.absence(away, now, replace(P, away_min_nights=3))["naechte"] == 3
+
+
+def test_price_shift() -> None:
+    """Preisgeführtes Heizen (0.25.0): günstige Stunden vorheizen, teure zurücknehmen, im Band 20,7–21,3."""
+    from custom_components.ems_mw4 import thermal as th
+    p = Params()
+    day = [45.0] * 7 + [55.0] * 8 + [65.0] * 5 + [52.0] * 4  # Nacht günstig, 15–20 Uhr teuer
+    assert th.price_shift(day, 21.0, p)["shift_k"] == 0.5  # jetzt 0 Uhr, günstig
+    evening = day[15:] + day[:15]
+    assert th.price_shift(evening, 21.0, p)["shift_k"] == -0.5
+    noon = day[10:] + day[:10]
+    assert th.price_shift(noon, 21.0, p)["shift_k"] == 0.0
+    # Band: zu warm kein Vorheizen, zu kühl kein Zurücknehmen
+    assert th.price_shift(day, 21.4, p)["shift_k"] == 0.0
+    assert th.price_shift(evening, 20.6, p)["shift_k"] == 0.0
+    # kleine Spanne: nichts
+    flat = [45.0 + (i % 3) for i in range(24)]
+    r = th.price_shift(flat, 21.0, p)
+    assert r["shift_k"] == 0.0 and "zu klein" in r["grund"]
+    assert th.price_shift([], 21.0, p)["shift_k"] == 0.0
+    # Viertelstunden zu Stunden
+    from datetime import datetime, timedelta, timezone
+    t0 = datetime(2026, 11, 25, 17, 30, tzinfo=timezone.utc)
+    slots = [t0 + timedelta(minutes=15 * i) for i in range(6)]
+    assert th.hourly_prices(slots, [10, 20, 30, 40, 50, 60]) == [15.0, 45.0]
+
+
+def test_reheat_start_from_model() -> None:
+    """Aufheizbeginn aus dem Trägheitsmodell (0.25.0): kälter → früher, nie früher als die Obergrenze."""
+    from datetime import datetime, timedelta, timezone
+    from custom_components.ems_mw4 import thermal as th
+    p = Params()
+    model = {"gueltig": True, "a": 0.025, "b": 0.006, "g": 0.06, "verzoegerung_h": 2}
+    now = datetime(2026, 12, 1, 12, 0, tzinfo=timezone.utc)
+    lower, back = now - timedelta(days=2), now + timedelta(days=6)
+    mild = th.reheat_start(model, 17.5, now, lower, back, [8.0] * 48, p)
+    cold = th.reheat_start(model, 17.5, now, lower, back, [0.0] * 48, p)
+    limit = back - timedelta(hours=p.away_reheat_before_h)
+    assert limit <= cold <= mild
+    assert mild > limit  # bei milder Witterung später als die feste Vorgabe: spart Tage im leeren Haus
+    assert mild <= back - timedelta(hours=p.away_boost_end_before_h + p.away_reheat_buffer_h)
+    # sehr kalt, Ziel mit größter Anhebung nicht erreichbar: Obergrenze
+    assert th.reheat_start(model, 17.0, now, lower, back, [-15.0] * 48, p) == limit
+    # ohne gültiges Modell: feste Vorgabe
+    assert th.reheat_start({"gueltig": False}, 17.5, now, lower, back, [8.0], p) is None
+    # nie vor away_min_setback_h nach dem Absenken
+    late_lower = back - timedelta(hours=40)
+    assert th.reheat_start(model, 20.0, now, late_lower, back, [8.0] * 48, p) >= late_lower + timedelta(hours=24)

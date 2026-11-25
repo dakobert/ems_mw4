@@ -16,6 +16,7 @@ from .const import (
     SWITCH_PROACTIVE,
     SWITCH_CURVE,
     SWITCH_CAR_NOW,
+    SWITCH_HEAT_PRICE,
     SWITCH_WALLBOX,
 )
 from .coordinator import EmsCoordinator
@@ -31,6 +32,7 @@ SWITCHES = (
     (SWITCH_PROACTIVE, "Vorausschauend heizen", "mdi:crystal-ball"),
     (SWITCH_CURVE, "Heizkurve automatisch anpassen", "mdi:chart-bell-curve-cumulative"),
     (SWITCH_CAR_NOW, "Auto jetzt voll laden", "mdi:car-electric"),
+    (SWITCH_HEAT_PRICE, "Heizung preisgeführt", "mdi:cash-clock"),
 )
 
 

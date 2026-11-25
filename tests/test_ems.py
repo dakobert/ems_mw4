@@ -693,3 +693,40 @@ async def test_room_frozen_temp_and_humidity(hass: HomeAssistant) -> None:
     hass.states.async_set(base + "_humidity", "41.0")
     assert c._room_value(first, later) is not None
     assert first not in c.rooms_frozen
+
+
+async def test_price_shift_in_comfort_and_reheat_model(hass: HomeAssistant) -> None:
+    """0.25.0: Preisstufe geht in die Komforttemperatur ein; Aufheizbeginn kommt aus dem Modell und steht dann fest."""
+    from custom_components.ems_mw4.const import SWITCH_HEAT_PRICE
+
+    _fill(hass)
+    entry = await _setup(hass)
+    c = entry.runtime_data
+    assert c.switches[SWITCH_HEAT_PRICE] is True
+    c.data["room_temp"] = 21.0
+    prices = [45.0] * 7 + [55.0] * 8 + [65.0] * 5 + [52.0] * 4
+    c._update_proactive([5.0] * 96, None, prices)
+    base = c.params.heat_comfort_base_c
+    assert c.proactive["preis"]["shift_k"] == 0.5
+    assert c.proactive["comfort_target_c"] == round(base + c.proactive["shift_k"] + 0.5, 1)
+    c.switches[SWITCH_HEAT_PRICE] = False
+    c._update_proactive([5.0] * 96, None, prices)
+    assert c.proactive["preis"]["shift_k"] == 0.0
+    # Aufheizbeginn aus dem Modell
+    now = dt_util.now()
+    c.response_model = {"gueltig": True, "a": 0.025, "b": 0.006, "g": 0.06, "verzoegerung_h": 2}
+    c.data["room_temp"] = 17.5
+    back = now + timedelta(days=4)
+    c.absence = {"naechte": 7, "abfahrt": now - timedelta(days=3), "rueckkehr": back,
+                 "absenken_ab": now - timedelta(days=3, hours=12), "aufheizen_ab": back - timedelta(hours=72)}
+    c._apply_reheat_model(now, [8.0] * 192)
+    assert c.absence["aufheizen_nach"] == "Modell"
+    assert c.absence["aufheizen_ab"] > back - timedelta(hours=72)
+    assert c.away_active(now)
+    # begonnen: steht fest, auch wenn das Modell später anders rechnen würde
+    later = c.absence["aufheizen_ab"] + timedelta(minutes=1)
+    c._apply_reheat_model(later, [8.0] * 192)
+    fixed = c.absence["aufheizen_ab"]
+    c.absence["aufheizen_ab"] = back - timedelta(hours=72)
+    c._apply_reheat_model(later, [-10.0] * 192)
+    assert c.absence["aufheizen_ab"] == fixed and not c.away_active(later)

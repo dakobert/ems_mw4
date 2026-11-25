@@ -447,6 +447,7 @@ class EmsProactiveSensor(EmsPlanBase):
             "aufheiz_boost": adv.get("aufheiz_boost"),
             "modell": adv.get("modell"),
             "modell_plan": adv.get("modell_plan"),
+            "preis": adv.get("preis"),
             "abwesenheit": None if not self.coordinator.absence else {
                 k: (v.isoformat() if hasattr(v, "isoformat") else v) for k, v in self.coordinator.absence.items()
             },
