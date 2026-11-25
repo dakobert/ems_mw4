@@ -246,7 +246,16 @@ RESP_MAX_DAYS = 30
 RESP_MIN_WINDOWS = 40  # ~5 Tage zusammenhängender Daten
 RESP_MAX_ERR_K = 0.35  # schlechter: Modell nicht verwenden
 # 05.11. 16 Uhr bis 06.11. 11 Uhr (MEZ) galt der kälteste Raum als Referenz – nicht vergleichbar
-RESP_SKIP = [(datetime.fromisoformat("2026-11-05T15:00:00+00:00"), datetime.fromisoformat("2026-11-06T10:00:00+00:00"))]
+RESP_SKIP = [
+    (datetime.fromisoformat("2026-11-05T15:00:00+00:00"), datetime.fromisoformat("2026-11-06T10:00:00+00:00")),
+    # 0.25.1: Referenz falsch durch Fühler-Regeln (13./14.11. nur Bad EG gültig, 18./19.11. eingefrorene Fühler)
+    (datetime.fromisoformat("2026-11-12T23:00:00+00:00"), datetime.fromisoformat("2026-11-14T13:00:00+00:00")),
+    (datetime.fromisoformat("2026-11-17T23:00:00+00:00"), datetime.fromisoformat("2026-11-19T19:40:00+00:00")),
+]
+RESP_JUMP_K = 0.4  # mehr Änderung je Stunde schafft die Fußbodenheizung nicht: Lüften, Fühlersprung
+RESP_HALF_LIFE_D = 21.0  # neuere Daten zählen mehr (Abdichtung EG 13.11.2026, Dämmung Bad OG)
+RESP_BIAS_H = 48  # Abweichungsausgleich aus den Vorhersagen, die in diesen Stunden endeten
+RESP_BIAS_MAX = 0.02  # K/h, entspricht ~0,6 K im Gleichgewicht
 
 
 def hourly_series(samples: list[dict[str, Any]], now: datetime, days: float = RESP_MAX_DAYS) -> list[dict[str, Any]]:
@@ -274,7 +283,17 @@ def hourly_series(samples: list[dict[str, Any]], now: datetime, days: float = RE
             vals[name] = sum(v) / len(v)
         else:
             out.append({"t": hour, **vals})
-    return out
+    # Sprünge (Lüften, Fühler springt nach Hänger): die Stunde und die zwei danach nicht lernen
+    drop: set[int] = set()
+    for i in range(1, len(out)):
+        if out[i]["t"] - out[i - 1]["t"] == timedelta(hours=1) and abs(out[i]["room"] - out[i - 1]["room"]) > RESP_JUMP_K:
+            drop.update((i, i + 1, i + 2))
+    return [row for i, row in enumerate(out) if i not in drop]
+
+
+def g_eff(model: dict[str, Any]) -> float:
+    """Fester Rest des Modells samt laufendem Abweichungsausgleich (0.25.1)."""
+    return float(model.get("g") or 0.0) + float(model.get("g_korrektur") or 0.0)
 
 
 def fit_response(series: list[dict[str, Any]]) -> dict[str, Any]:
@@ -302,20 +321,51 @@ def fit_response(series: list[dict[str, Any]]) -> dict[str, Any]:
             continue
         st = np.array(starts)
         target = room[st + RESP_H]
+        age_d = (n - 1 - (st + RESP_H)) / 24.0
+        w = 0.5 ** (age_d / RESP_HALF_LIFE_D)
+        w = w / w.sum()
         for a in np.linspace(0.005, 0.08, 16):
             for b in np.linspace(0.0, 0.03, 11):
                 for g in np.linspace(-0.1, 0.2, 16):
                     x = room[st].copy()
                     for k in range(RESP_H):
                         x = x + a * (com[st + k - lag] - x) + b * (out[st + k] - x) + g
-                    err = float(np.abs(x - target).mean())
+                    err = float((np.abs(x - target) * w).sum())
                     if best is None or err < best[0]:
                         best = (err, float(a), float(b), float(g), lag, len(starts))
     if best is None:
         return res
     err, a, b, g, lag, windows = best
+
+    def predict(st: Any, gg: float) -> Any:
+        x = room[st].copy()
+        for k in range(RESP_H):
+            x = x + a * (com[st + k - lag] - x) + b * (out[st + k] - x) + gg
+        return x
+
+    # g fein nachziehen (das Gitter hat 0,02 K/h Schritte, das sind ~0,6 K im Gleichgewicht)
+    st = np.array([s for s in range(lag, n - RESP_H, 3)
+                   if not np.isnan(room[s:s + RESP_H + 1]).any() and not np.isnan(out[s:s + RESP_H]).any()
+                   and not np.isnan(com[s - lag:s - lag + RESP_H]).any()])
+    gain = float(sum((1.0 - a - b) ** k for k in range(RESP_H)))  # Wirkung von g auf die 24-h-Vorhersage
+    age_d = (n - 1 - (st + RESP_H)) / 24.0
+    w = 0.5 ** (age_d / RESP_HALF_LIFE_D)
+    w = w / w.sum()
+    resid = room[st + RESP_H] - predict(st, g)
+    g = g + float((resid * w).sum()) / gain
+    resid = room[st + RESP_H] - predict(st, g)
+    err = float((np.abs(resid) * w).sum())
+    # Abweichungsausgleich: wie weit lagen die zuletzt fertigen Vorhersagen daneben?
+    recent = (n - 1 - (st + RESP_H)) < RESP_BIAS_H
+    corr, err_recent = 0.0, None
+    if recent.sum() >= 8:
+        r = resid[recent]
+        corr = max(-RESP_BIAS_MAX, min(RESP_BIAS_MAX, float(np.median(r)) / gain))
+        err_recent = round(float(np.abs(r).mean()), 3)
     res.update({
         "a": round(a, 4), "b": round(b, 4), "g": round(g, 4), "verzoegerung_h": lag, "fenster": windows,
+        "g_korrektur": round(corr, 4), "fehler_48h_k": err_recent,
+        "abweichung_ausgleich_k": round(corr / (a + b), 2) if a + b > 0 else None,
         "fehler_24h_k": round(err, 3), "zeitkonstante_h": round(1.0 / (a + b), 1) if a + b > 0 else None,
     })
     res["gueltig"] = a >= 0.008 and err <= RESP_MAX_ERR_K
@@ -326,7 +376,7 @@ def comfort_for(model: dict[str, Any], room_target: float, outdoor: float) -> fl
     """Komforttemperatur, bei der sich der Raum auf Dauer bei room_target einpendelt."""
     if not model.get("gueltig"):
         return None
-    a, b, g = model["a"], model["b"], model["g"]
+    a, b, g = model["a"], model["b"], g_eff(model)
     return round(((a + b) * room_target - b * outdoor - g) / a, 2)
 
 
@@ -342,7 +392,7 @@ def plan_comfort(
     """
     if not model.get("gueltig") or room_now is None or not out_ahead:
         return None
-    a, b, g, lag = model["a"], model["b"], model["g"], int(model["verzoegerung_h"])
+    a, b, g, lag = model["a"], model["b"], g_eff(model), int(model["verzoegerung_h"])
     target, upper = p.room_target_c, p.room_target_c + p.room_band_up_c
     outs = (list(out_ahead) + [out_ahead[-1]] * horizon_h)[:horizon_h]
     past = list(comfort_past)[-lag:] if lag else []
@@ -435,7 +485,7 @@ def reheat_start(
     """
     if not model.get("gueltig") or room_now is None:
         return None
-    a, b, g, lag = model["a"], model["b"], model["g"], int(model.get("verzoegerung_h") or 0)
+    a, b, g, lag = model["a"], model["b"], g_eff(model), int(model.get("verzoegerung_h") or 0)
     away_c = p.away_room_c + p.away_comfort_offset_k
     hot_c = p.heat_comfort_base_c + max(p.heat_shift_max_k, p.away_boost_k)
     goal = p.room_target_c - p.away_boost_margin_k

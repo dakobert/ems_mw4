@@ -790,3 +790,42 @@ def test_reheat_start_from_model() -> None:
     # nie vor away_min_setback_h nach dem Absenken
     late_lower = back - timedelta(hours=40)
     assert th.reheat_start(model, 20.0, now, late_lower, back, [8.0] * 48, p) >= late_lower + timedelta(hours=24)
+
+
+def test_response_model_bias_and_cleaning() -> None:
+    """0.25.1: g fein nachgezogen, Abweichungsausgleich aus den letzten 48 h, Sprünge werden nicht gelernt."""
+    from datetime import datetime, timedelta, timezone
+    import math
+    from custom_components.ems_mw4 import thermal as th
+
+    a, b, g = 0.025, 0.009, 0.07  # g liegt nicht auf dem Gitter (Schritt 0,02)
+    t0 = datetime(2026, 12, 1, tzinfo=timezone.utc)
+    hours = 24 * 12
+
+    def run(extra_last_h: int, extra: float, jump_at: int | None = None):
+        samples, room = [], 20.0
+        for h in range(hours):
+            out = 6 + 4 * math.sin(h / 24 * 2 * math.pi)
+            comfort = 21.0 + (1.5 if (h // 30) % 2 else 0.0)
+            shown = room + (3.0 if jump_at is not None and jump_at <= h < jump_at + 1 else 0.0)
+            for q in range(4):
+                samples.append({"t": (t0 + timedelta(hours=h, minutes=15 * q)).isoformat(), "room_temp": shown,
+                                "outdoor_temp": out, "heat_comfort": comfort})
+            gg = g + (extra if h >= hours - extra_last_h else 0.0)
+            room = room + a * (comfort - room) + b * (out - room) + gg
+        return th.hourly_series(samples, t0 + timedelta(hours=hours))
+
+    m = th.fit_response(run(0, 0.0))
+    assert m["gueltig"] and m["fehler_24h_k"] < 0.05 and abs(m["g_korrektur"]) < 0.003
+    # Gleichgewicht stimmt, auch wenn a, b, g einzeln vom Gitter abweichen
+    truth = ((a + b) * 21 - b * 6 - g) / a
+    assert abs(th.comfort_for(m, 21, 6) - truth) < 0.3
+    # die letzten drei Tage wärmer (z. B. Sonne/Dämmung): Ausgleich positiv
+    m2 = th.fit_response(run(72, 0.015))
+    assert m2["g_korrektur"] > 0.003
+    assert th.g_eff(m2) > m2["g"]
+    # Sprung (Lüften/Fühler): Stunde und zwei danach fehlen
+    series = run(0, 0.0, jump_at=100)
+    times = {r["t"] for r in series}
+    assert t0 + timedelta(hours=100) not in times and t0 + timedelta(hours=102) not in times
+    assert t0 + timedelta(hours=99) in times
