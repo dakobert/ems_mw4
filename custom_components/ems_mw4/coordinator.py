@@ -129,6 +129,8 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._room_pair_seen: dict[str, tuple[tuple[float, float], datetime]] = {}
         self.rooms_frozen: dict[str, float] = {}  # Fühler mit hängender Messung -> Stunden
         self._frozen_pushed: set[str] = set()
+        self.spread: dict[str, Any] = {"werte": 0, "median_k": None, "zu_hoch": False}
+        self._spread_pushed_on: Any = None
         self._coarse: dict[str, bool] = {}
         self.heat_fit_days: int = 0
         self._model_day: Any = None
@@ -313,6 +315,15 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self._coarse[entity_id] = coarse
         return self._coarse[entity_id]
 
+    async def _async_spread_push(self) -> None:
+        """Spreizung dauerhaft zu hoch: einmal am Tag abends melden (0.25.2)."""
+        if not self.hass.services.has_service("notify", NOTIFY_SERVICE):
+            return
+        await self.hass.services.async_call("notify", NOTIFY_SERVICE, {
+            "title": "Heizung: wenig Durchfluss",
+            "message": f"Spreizung {self.spread['median_k']} K (Soll 5 K). Abscheider und Verteiler prüfen.",
+        }, blocking=False)
+
     async def _async_frozen_push(self, now: datetime) -> None:
         """Nur mehrtägig hängende Fühler melden, einmal je Vorfall, abends (18–21 Uhr)."""
         new = [
@@ -431,6 +442,11 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                               ("heat_mode", "plan_heat_mode")):
                 sample[name] = self.plan[key][i]
         self.samples.append(sample)
+        self.spread = th.heating_spread(self.samples, dt_util.as_utc(now))
+        if self.spread["zu_hoch"] and 18 <= now.hour < 21 and self._spread_pushed_on != now.date():
+            self._spread_pushed_on = now.date()
+            self.config_entry.async_create_background_task(
+                self.hass, self._async_spread_push(), "ems_mw4_spreizung_push")
         if len(self.samples) > MAX_SAMPLES:
             del self.samples[: len(self.samples) - MAX_SAMPLES]
         self._store.async_delay_save(self._data_to_save, 30)

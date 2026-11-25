@@ -11,7 +11,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from typing import Any
 
-from .const import Params
+from .const import SPREAD_ALARM_K, SPREAD_MAX_FLOW_C, SPREAD_MIN_POWER_W, SPREAD_MIN_VALUES, Params
 
 
 def _mean(values: list[float]) -> float | None:
@@ -512,3 +512,29 @@ def reheat_start(
         start -= timedelta(hours=1)
     start -= timedelta(hours=lag + p.away_reheat_buffer_h)
     return max(start, earliest)
+
+
+def heating_spread(samples: list[dict[str, Any]], now: datetime, hours: float = 24.0) -> dict[str, Any]:
+    """Spreizung Vorlauf − Rücklauf der Wärmepumpe im Heizbetrieb über die letzten Stunden (0.25.2)."""
+    start = now - timedelta(hours=hours)
+    values: list[float] = []
+    for s in samples:
+        try:
+            t = datetime.fromisoformat(s["t"])
+        except (KeyError, ValueError):
+            continue
+        flow, ret = s.get("flow_wp"), s.get("return_wp")
+        if t < start or flow is None or ret is None or not s.get("compressor"):
+            continue
+        if (s.get("hp_power") or 0.0) < SPREAD_MIN_POWER_W or flow >= SPREAD_MAX_FLOW_C:
+            continue
+        d = flow - ret
+        if 0.0 <= d <= 20.0:
+            values.append(d)
+    res: dict[str, Any] = {"werte": len(values), "median_k": None, "mittel_k": None, "zu_hoch": False}
+    if len(values) < SPREAD_MIN_VALUES:
+        return res
+    v = sorted(values)
+    median = v[len(v) // 2] if len(v) % 2 else (v[len(v) // 2 - 1] + v[len(v) // 2]) / 2
+    res.update(median_k=round(median, 1), mittel_k=round(sum(v) / len(v), 1), zu_hoch=median > SPREAD_ALARM_K)
+    return res

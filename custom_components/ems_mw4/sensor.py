@@ -12,7 +12,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from . import EmsConfigEntry
-from .const import DOMAIN, KEY_ROOM_TEMP, KEY_SAMPLES, KEY_SOURCES_OK, NAME, SOURCES, Source
+from .const import DOMAIN, KEY_ROOM_TEMP, KEY_SAMPLES, KEY_SOURCES_OK, NAME, SOURCES, SPREAD_ALARM_K, Source
 from .coordinator import EmsCoordinator
 
 
@@ -24,6 +24,7 @@ async def async_setup_entry(
     entities.append(EmsRoomSensor(coordinator, entry))
     entities.append(EmsStatusSensor(coordinator, entry))
     entities.append(EmsSamplesSensor(coordinator, entry))
+    entities.append(EmsSpreadSensor(coordinator, entry))
     entities.extend(plan_entities(coordinator, entry))
     async_add_entities(entities)
 
@@ -337,6 +338,28 @@ class EmsImportSensor(EmsPlanBase):
     @property
     def native_value(self) -> float:
         return self.coordinator.cost_sum(_days("today"), "kwh")
+
+
+class EmsSpreadSensor(EmsBaseSensor):
+    """Spreizung Vorlauf − Rücklauf im Heizbetrieb, Median der letzten 24 h (0.25.2)."""
+
+    _attr_native_unit_of_measurement = "K"
+    _attr_suggested_display_precision = 1
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_icon = "mdi:thermometer-lines"
+
+    def __init__(self, coordinator: EmsCoordinator, entry: EmsConfigEntry) -> None:
+        super().__init__(coordinator, entry, "heat_spread", "Spreizung Heizung")
+
+    @property
+    def native_value(self) -> float | None:
+        return self.coordinator.spread.get("median_k")
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        s = self.coordinator.spread
+        return {"mittel_k": s.get("mittel_k"), "messpunkte_24h": s.get("werte"), "zu_hoch": s.get("zu_hoch"),
+                "soll_k": 5.0, "alarm_ab_k": SPREAD_ALARM_K}
 
 
 class EmsHeatModelSensor(EmsPlanBase):

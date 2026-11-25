@@ -829,3 +829,21 @@ def test_response_model_bias_and_cleaning() -> None:
     times = {r["t"] for r in series}
     assert t0 + timedelta(hours=100) not in times and t0 + timedelta(hours=102) not in times
     assert t0 + timedelta(hours=99) in times
+
+
+def test_heating_spread() -> None:
+    """0.25.2: Spreizung nur im Heizbetrieb (Verdichter an, kein Warmwasser), Median über 24 h."""
+    from datetime import datetime, timedelta, timezone
+    from custom_components.ems_mw4 import thermal as th
+
+    now = datetime(2026, 11, 25, 21, 0, tzinfo=timezone.utc)
+    def s(h, flow, ret, comp=1.0, power=1800.0):
+        return {"t": (now - timedelta(hours=h)).isoformat(), "flow_wp": flow, "return_wp": ret,
+                "compressor": comp, "hp_power": power}
+    rows = [s(i * 0.5, 34.0, 29.0) for i in range(10)]
+    rows += [s(1, 55.0, 45.0), s(2, 40.0, 20.0, comp=0.0), s(30, 40.0, 20.0)]  # Warmwasser, aus, zu alt
+    r = th.heating_spread(rows, now)
+    assert r["werte"] == 10 and r["median_k"] == 5.0 and not r["zu_hoch"]
+    high = [s(i * 0.5, 36.0, 26.5) for i in range(10)]
+    assert th.heating_spread(high, now)["zu_hoch"] is True
+    assert th.heating_spread(rows[:5], now)["median_k"] is None  # zu wenig Messpunkte

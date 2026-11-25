@@ -91,7 +91,17 @@ VALID_RANGE: dict[str, tuple[float, float]] = {
     "outdoor_temp": (-40.0, 50.0),
     "dhw_temp": (0.0, 95.0),
     "flow_temp": (0.0, 90.0),
+    "flow_wp": (0.0, 90.0),
+    "return_wp": (0.0, 90.0),
+    "flow_target": (0.0, 90.0),
 }
+
+# Spreizung Heizung (0.25.2, Roy 25.11.2026): Vorlauf − Rücklauf der Wärmepumpe im Heizbetrieb. Soll am Gerät 5 K;
+# dauerhaft deutlich mehr heißt zu wenig Durchfluss (Schlamm, zugedrehte Kreise, Luft).
+SPREAD_ALARM_K = 8.0
+SPREAD_MIN_VALUES = 8  # Messpunkte (15 min) mit laufendem Verdichter in 24 h
+SPREAD_MAX_FLOW_C = 45.0  # darüber lädt sie Warmwasser
+SPREAD_MIN_POWER_W = 300.0
 
 SOURCES: tuple[Source, ...] = (
     Source("pv_power", "PV-Leistung", "sensor.hostname_scb_4fa5bb_sum_power_of_all_pv_dc_inputs", "W", "power", precision=0),
@@ -103,6 +113,9 @@ SOURCES: tuple[Source, ...] = (
     Source("dhw_temp", "Warmwasser Temperatur", "sensor.stiebel_eltron_isg_actual_temperature_water", "°C", "temperature", debounce=True, precision=1),
     Source("outdoor_temp", "Außentemperatur", "sensor.stiebel_eltron_isg_outdoor_temperature", "°C", "temperature", debounce=True, precision=1),
     Source("flow_temp", "Heizkreis Temperatur", "sensor.stiebel_eltron_isg_actual_temperature_hk_1", "°C", "temperature", debounce=True, precision=1),
+    Source("flow_wp", "Vorlauf Wärmepumpe", "sensor.stiebel_eltron_isg_flow_temperature_wp1", "°C", "temperature", debounce=True, precision=1),
+    Source("return_wp", "Rücklauf Wärmepumpe", "sensor.stiebel_eltron_isg_return_temperature_wp1", "°C", "temperature", debounce=True, precision=1),
+    Source("flow_target", "Vorlauf Soll", "sensor.stiebel_eltron_isg_target_temperature_hk_1", "°C", "temperature", debounce=True, precision=1),
     Source("sg_ready", "SG-Ready-Zustand", "sensor.stiebel_eltron_isg_sg_ready_state", debounce=True, precision=0),
     Source("compressor", "Verdichter", "binary_sensor.stiebel_eltron_isg_compressor", debounce=True, precision=0),
     Source("wallbox_power", "Wallbox Leistung", "sensor.go_echarger_216292_nrg_12", "W", "power", precision=0),
