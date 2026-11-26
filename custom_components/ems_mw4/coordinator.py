@@ -431,6 +431,7 @@ class EmsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             sample[source.key] = self.data.get(source.key)
         sample[KEY_ROOM_TEMP] = self.data.get(KEY_ROOM_TEMP)
         sample["heat_shift"] = self.proactive.get("shift_k")
+        sample["heat_price_k"] = (self.proactive.get("preis") or {}).get("shift_k")
         sample["heat_curve"] = self._number(CONF_HEAT_CURVE)
         sample["heat_comfort"] = self._number(CONF_COMFORT_TEMP)
         sample["away"] = self.away_active() or None

@@ -345,6 +345,11 @@ SETTINGS: tuple[Setting, ...] = (
     Setting("heat_shift_max_k", "Heizung: größte Anhebung", 0, 6, 0.5, "K", "mdi:arrow-up-bold"),
     Setting("heat_curve_min", "Heizkurve: kleinste Steilheit", 0.2, 1.0, 0.05, None, "mdi:chart-bell-curve-cumulative"),
     Setting("heat_curve_max", "Heizkurve: größte Steilheit", 0.2, 1.0, 0.05, None, "mdi:chart-bell-curve-cumulative"),
+    # 0.25.3: Versuchsreihe Estrich als Speicher (Roy 26.11.2026, bis April 2027)
+    Setting("heat_price_shift_k", "Preisgeführt: Verschiebung", 0, 2, 0.25, "K", "mdi:swap-vertical"),
+    Setting("heat_price_hours", "Preisgeführt: Stunden je Richtung", 2, 10, 1, "h", "mdi:clock-outline"),
+    Setting("heat_price_band_k", "Preisgeführt: Band um Raumziel", 0.1, 0.8, 0.1, "K", "mdi:arrow-expand-vertical"),
+    Setting("heat_price_min_spread_ct", "Preisgeführt: Mindest-Preisspanne", 2, 20, 1, "ct/kWh", "mdi:cash-check"),
     Setting("heat_block_max_h", "Sperre: längste Dauer", 0.5, 3, 0.25, "h", "mdi:timer-sand"),
     Setting("heat_block_gap_h", "Sperre: Mindestabstand", 2, 24, 1, "h", "mdi:timer-pause"),
     Setting("heat_block_min_adv_ct", "Sperre: Mindest-Preisvorteil", 2, 30, 0.5, "ct/kWh", "mdi:cash-check"),

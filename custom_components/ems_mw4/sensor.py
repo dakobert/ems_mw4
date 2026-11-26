@@ -25,6 +25,7 @@ async def async_setup_entry(
     entities.append(EmsStatusSensor(coordinator, entry))
     entities.append(EmsSamplesSensor(coordinator, entry))
     entities.append(EmsSpreadSensor(coordinator, entry))
+    entities.append(EmsPriceShiftSensor(coordinator, entry))
     entities.extend(plan_entities(coordinator, entry))
     async_add_entities(entities)
 
@@ -360,6 +361,27 @@ class EmsSpreadSensor(EmsBaseSensor):
         s = self.coordinator.spread
         return {"mittel_k": s.get("mittel_k"), "messpunkte_24h": s.get("werte"), "zu_hoch": s.get("zu_hoch"),
                 "soll_k": 5.0, "alarm_ab_k": SPREAD_ALARM_K}
+
+
+class EmsPriceShiftSensor(EmsBaseSensor):
+    """Wirksame Preisverschiebung der Komforttemperatur (0.25.3, für die Versuchsreihe Estrich als Speicher)."""
+
+    _attr_native_unit_of_measurement = "K"
+    _attr_suggested_display_precision = 2
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_icon = "mdi:cash-clock"
+
+    def __init__(self, coordinator: EmsCoordinator, entry: EmsConfigEntry) -> None:
+        super().__init__(coordinator, entry, "heat_price_shift", "Heizung Preisverschiebung")
+
+    @property
+    def native_value(self) -> float | None:
+        return (self.coordinator.proactive.get("preis") or {}).get("shift_k")
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        price = self.coordinator.proactive.get("preis") or {}
+        return {"grund": price.get("grund"), "spanne_ct": price.get("spanne_ct")}
 
 
 class EmsHeatModelSensor(EmsPlanBase):
